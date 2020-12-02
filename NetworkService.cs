@@ -12,7 +12,7 @@ public class SortedConcurrentList<TKey, TValue> where TKey : struct where TValue
     SortedList<TKey, TValue> List = new SortedList<TKey, TValue>();
     readonly object Lock = new object();
 
-    public bool Push(TKey key, TValue value)
+    public bool Enqueue(TKey key, TValue value)
     {
         lock (Lock)
         {
@@ -29,7 +29,7 @@ public class SortedConcurrentList<TKey, TValue> where TKey : struct where TValue
         }
     }
 
-    public bool GetNext(out TValue value)
+    public bool TryDequeue(out TValue value)
     {
         lock (Lock)
         {
@@ -152,8 +152,8 @@ public class NetworkService
 
     // Tcp packets will already arrive sorted (order is guaranteed), no additional sorting needed.
     // For udp packets, we're using timestamps to determine the order of the packet.
-    ConcurrentQueue<byte[]> ReliableChannel = new ConcurrentQueue<byte[]>();
-    SortedConcurrentList<ulong, byte[]> UnreliableChannel = new SortedConcurrentList<ulong, byte[]>();
+    ConcurrentQueue<byte[]> ReliableMessages = new ConcurrentQueue<byte[]>();
+    SortedConcurrentList<ulong, byte[]> UnreliableMessages = new SortedConcurrentList<ulong, byte[]>();
 
     // Message layout:
     // 2 bytes (ushort) - message length (number of bytes)
@@ -181,11 +181,21 @@ public class NetworkService
             return false;
         }
 
+        Debug.Assert(TcpThread == null);
+        Debug.Assert(UdpThread == null);
         Debug.Assert(Server == null);
         Debug.Assert(Client == null);
         Debug.Assert(Unrealiable == null);
         Debug.Assert(ClientStateReliable == EClientState.Disconnected);
         Debug.Assert(ClientStateUnreliable == EClientState.Disconnected);
+        Debug.Assert(ReliableReceiveBuffer.Head == 0);
+        Debug.Assert(UnreliableReceiveBuffer.Head == 0);
+
+        while (!ReliableSendBuffer.IsEmpty) ReliableSendBuffer.TryDequeue(out byte[] temp);
+        while (!UnreliableSendBuffer.IsEmpty) UnreliableSendBuffer.TryDequeue(out byte[] temp);
+
+        while (!ReliableMessages.IsEmpty) ReliableMessages.TryDequeue(out byte[] temp);
+        UnreliableMessages.Clear();
 
         UnreliableTime = 0;
         Server = new TcpListener(IPAddress.Parse("127.0.0.1"), portReliable);
@@ -194,12 +204,16 @@ public class NetworkService
         RemoteUnreliable = new IPEndPoint(IPAddress.Any, 0);
 
         State = ENetworkState.Startup;
+        ClientStateReliable = EClientState.Connecting;
+        ClientStateUnreliable = EClientState.Connected;
         bIsServer = true;
 
         bShutdown = false;
         TcpThread = new Thread(TcpUpdate);
+        TcpThread.Name = "Lightnet - TCP Update";
         TcpThread.Start();
         UdpThread = new Thread(UdpUpdate);
+        UdpThread.Name = "Lightnet - UDP Update";
         UdpThread.Start();
 
         return true;
@@ -213,11 +227,21 @@ public class NetworkService
             return false;
         }
 
+        Debug.Assert(TcpThread == null);
+        Debug.Assert(UdpThread == null);
         Debug.Assert(Server == null);
         Debug.Assert(Client == null);
         Debug.Assert(Unrealiable == null);
         Debug.Assert(ClientStateReliable == EClientState.Disconnected);
         Debug.Assert(ClientStateUnreliable == EClientState.Disconnected);
+        Debug.Assert(ReliableReceiveBuffer.Head == 0);
+        Debug.Assert(UnreliableReceiveBuffer.Head == 0);
+
+        while (!ReliableSendBuffer.IsEmpty) ReliableSendBuffer.TryDequeue(out byte[] temp);
+        while (!UnreliableSendBuffer.IsEmpty) UnreliableSendBuffer.TryDequeue(out byte[] temp);
+
+        while (!ReliableMessages.IsEmpty) ReliableMessages.TryDequeue(out byte[] temp);
+        UnreliableMessages.Clear();
 
         bShutdown = false;
         ClientStateReliable = EClientState.Connecting;
@@ -231,8 +255,10 @@ public class NetworkService
         RemoteUnreliable = new IPEndPoint(address, portUnreliable);
 
         TcpThread = new Thread(TcpUpdate);
+        TcpThread.Name = "Lightnet - TCP Update";
         TcpThread.Start();
         UdpThread = new Thread(UdpUpdate);
+        UdpThread.Name = "Lightnet - UDP Update";
         UdpThread.Start();
 
         return true;
@@ -273,11 +299,18 @@ public class NetworkService
             {
                 TcpThread.Abort();
             }
-            if (!UdpThread.Join(SHUTDOWN_TIMEOUT))
+
+            // might have been already killed by TcpThread
+            if (UdpThread != null && !UdpThread.Join(SHUTDOWN_TIMEOUT))
             {
                 UdpThread.Abort();
             }
+
+            TcpThread = null;
+            UdpThread = null;
+            State = ENetworkState.Closed;
         }
+
         Thread abortThread = new Thread(AbortThreads);
         abortThread.Start();
 
@@ -290,7 +323,6 @@ public class NetworkService
 
         ClientStateReliable = EClientState.Disconnected;
         ClientStateUnreliable = EClientState.Disconnected;
-        State = ENetworkState.Closed;
         return true;
     }
 
@@ -298,11 +330,11 @@ public class NetworkService
     {
         if (channel == ENetChannel.Reliable)
         {
-            return ReliableChannel.TryDequeue(out data);
+            return ReliableMessages.TryDequeue(out data);
         }
         else if (channel == ENetChannel.Unreliable)
         {
-            return UnreliableChannel.GetNext(out data);
+            return UnreliableMessages.TryDequeue(out data);
         }
         data = null;
         return false;
@@ -364,7 +396,7 @@ public class NetworkService
         }
     }
 
-    // responsible for shutdown in case of disconnect
+    // responsible for shutdown in case of disconnect / fail
     // TODO: maybe have a third thread for this? may be overpowered though...
     void TcpUpdate()
     {
@@ -389,6 +421,8 @@ public class NetworkService
             bIsServer = false;
             Server = null;
             Client = null;
+            TcpThread = null;
+            UdpThread = null;
             State = ENetworkState.Closed;
         }
 
@@ -403,8 +437,10 @@ public class NetworkService
             if (State == ENetworkState.Startup)
             {
                 // if we're server, wait for incoming connection
-                if (bIsServer && Client == null)
+                if (bIsServer)
                 {
+                    Debug.Assert(Client == null);
+                    Debug.Assert(ClientStateReliable == EClientState.Connecting);
                     try
                     {
                          // this will block the thread until someone connects
@@ -446,6 +482,19 @@ public class NetworkService
                 }
 
                 continue;
+            }
+
+            // check every frame whether our connection is still alive
+            if (!Client.Connected)
+            {
+                ClientStateReliable = EClientState.Disconnected;
+            }
+
+            // when either one connection failed / is lost, shutdown
+            if (ClientStateUnreliable == EClientState.Disconnected || ClientStateUnreliable == EClientState.Disconnected)
+            {
+                ConnectionLost();
+                return;
             }
 
             // RECEIVING
@@ -491,13 +540,14 @@ public class NetworkService
                     continue;
                 }
 
-                msgSize = BitConverter.ToUInt16(ReliableReceiveBuffer.Buffer, 0);
+                int offset = 0;
+                msgSize = BitConverter.ToUInt16(ReliableReceiveBuffer.Buffer, 0); offset += sizeof(ushort);
                 if (ReliableReceiveBuffer.Head >= sizeof(ushort) + msgSize)
                 {
                     // copy message from receive buffer into message queue
                     byte[] message = new byte[msgSize];
-                    Array.Copy(ReliableReceiveBuffer.Buffer, sizeof(ushort), message, 0, msgSize);
-                    ReliableChannel.Enqueue(message);
+                    Array.Copy(ReliableReceiveBuffer.Buffer, offset, message, 0, msgSize);
+                    ReliableMessages.Enqueue(message);
 
                     // from https://docs.microsoft.com/en-us/dotnet/api/system.array.copy?view=net-5.0 :
                     // If sourceArray and destinationArray overlap, this method behaves as if the original values of sourceArray 
@@ -553,28 +603,34 @@ public class NetworkService
     {
         while (!bShutdown)
         {
-            if (ClientStateUnreliable == EClientState.Connecting)
+            if (State == ENetworkState.Startup)
             {
-                try
+                if (!bIsServer && ClientStateUnreliable == EClientState.Connecting)
                 {
-                    Unrealiable.Connect(RemoteUnreliable);
+                    try
+                    {
+                        Unrealiable.Connect(RemoteUnreliable);
+                    }
+                    catch (SocketException e)
+                    {
+                        ThreadLogging.LogWarning(e.Message);
+                        ClientStateUnreliable = EClientState.Disconnected;
+                        return;
+                    }
+
+                    if (Unrealiable.Client.Connected)
+                    {
+                        ClientStateUnreliable = EClientState.Connected;
+                    }
                 }
-                catch (SocketException e)
-                {
-                    ThreadLogging.LogWarning(e.Message);
-                    ClientStateUnreliable = EClientState.Disconnected;
-                    return;
-                }
-                if (Unrealiable.Client.Connected)
-                {
-                    ClientStateUnreliable = EClientState.Connected;
-                }
+
                 continue;
             }
 
-            if (!Unrealiable.Client.Connected)
+            if (!bIsServer && !Unrealiable.Client.Connected)
             {
                 ClientStateUnreliable = EClientState.Disconnected;
+                continue;
             }
 
             int maxReadSize = CHANNEL_BUFFER_SIZE - UnreliableReceiveBuffer.Head;
@@ -587,21 +643,21 @@ public class NetworkService
             }
 
             // RECEIVING
-            byte[] data = null;
-            try
+            while (Unrealiable.Available > 0)
             {
-                data = Unrealiable.Receive(ref RemoteUnreliable);
-            }
-            catch (Exception e) 
-            {
-                ThreadLogging.LogWarning("UDP Receiving failed: " + e.Message);
-                ClientStateUnreliable = EClientState.Disconnected;
-                return;
-            }
+                byte[] data = null;
+                try
+                {
+                    data = Unrealiable.Receive(ref RemoteUnreliable);
+                }
+                catch (Exception e) 
+                {
+                    ThreadLogging.LogWarning("UDP Receiving failed: " + e.Message);
+                    ClientStateUnreliable = EClientState.Disconnected;
+                    return;
+                }
 
-            int bytesToRead = Math.Min(data.Length, maxReadSize);
-            while (bytesToRead > 0)
-            {
+                int bytesToRead = Math.Min(data.Length, maxReadSize);
                 Array.Copy(data, 0, UnreliableReceiveBuffer.Buffer, UnreliableReceiveBuffer.Head, bytesToRead);
                 UnreliableReceiveBuffer.Head += bytesToRead;
 
@@ -612,13 +668,14 @@ public class NetworkService
                     continue;
                 }
 
-                timestamp = BitConverter.ToUInt64(UnreliableReceiveBuffer.Buffer, 0);
-                msgSize = BitConverter.ToUInt16(UnreliableReceiveBuffer.Buffer, sizeof(ushort));
-                if (UnreliableReceiveBuffer.Head >= sizeof(ulong) + sizeof(ushort) + msgSize)
+                int offset = 0;
+                timestamp = BitConverter.ToUInt64(UnreliableReceiveBuffer.Buffer, offset); offset += sizeof(ulong);
+                msgSize = BitConverter.ToUInt16(UnreliableReceiveBuffer.Buffer, offset);   offset += sizeof(ushort);
+                if (UnreliableReceiveBuffer.Head >= offset + msgSize)
                 {
                     byte[] message = new byte[msgSize];
-                    Array.Copy(UnreliableReceiveBuffer.Buffer, 0, message, 0, msgSize);
-                    UnreliableChannel.Push(timestamp, message);
+                    Array.Copy(UnreliableReceiveBuffer.Buffer, offset, message, 0, msgSize);
+                    UnreliableMessages.Enqueue(timestamp, message);
 
                     int remanining = CHANNEL_BUFFER_SIZE - UnreliableReceiveBuffer.Head;
                     if (remanining > 0)
@@ -635,7 +692,7 @@ public class NetworkService
             {
                 byte[] timestamp = BitConverter.GetBytes(UnreliableTime++);
                 byte[] msgLength = BitConverter.GetBytes((ushort)messageData.Length);
-                byte[] sendData = new byte[sizeof(ushort) + messageData.Length];
+                byte[] sendData = new byte[sizeof(ulong) + sizeof(ushort) + messageData.Length];
 
                 int offset = 0;
                 Array.Copy(timestamp, 0, sendData, offset, timestamp.Length); offset += timestamp.Length;
