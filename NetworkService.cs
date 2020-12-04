@@ -1,58 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using System.Runtime.CompilerServices;
 using UnityEngine;
-
-public class SortedConcurrentList<TKey, TValue> where TKey : struct where TValue : class
-{
-    SortedList<TKey, TValue> List = new SortedList<TKey, TValue>();
-    readonly object Lock = new object();
-
-    public bool Enqueue(TKey key, TValue value)
-    {
-        lock (Lock)
-        {
-            try
-            {
-                List.Add(key, value);
-                return true;
-            }
-            catch (ArgumentException)
-            {
-                ThreadLogging.LogError("Cannot add element ({}, {}) to list, key already exists!", new object[]{ key, value });
-                return false;
-            }
-        }
-    }
-
-    public bool TryDequeue(out TValue value)
-    {
-        lock (Lock)
-        {
-            if (List.Values.Count == 0)
-            {
-                value = null;
-                return false;
-            }
-
-            value = List.Values[0];
-            List.RemoveAt(0);
-        }
-        return true;
-    }
-
-    public void Clear()
-    {
-        lock (Lock)
-        {
-            List.Clear();
-        }
-    }
-}
 
 public enum ENetChannel
 {
@@ -68,58 +19,10 @@ public enum ENetworkState
     Shutdown
 }
 
-public enum ELogType
-{
-    Info,
-    Warning,
-    Error
-}
-
-public struct LogMessage
-{
-    public ELogType Type;
-    public string Message;
-}
-
-public static class ThreadLogging
-{
-    static ConcurrentQueue<LogMessage> Logs = new ConcurrentQueue<LogMessage>();
-
-    static void Log(ELogType type, string format, object[] args = null, [CallerFilePathAttribute] string caller = null, [CallerLineNumber] int lineNumber = 0)
-    {
-        caller = System.IO.Path.GetFileName(caller);
-        args = args == null ? new object[0] : args;
-        LogMessage msg;
-        msg.Type = type;
-        msg.Message = string.Format("[{0}:{1}]", caller, lineNumber) + string.Format(format, args);
-        Logs.Enqueue(msg);
-    }
-
-    public static bool GetNext(out LogMessage nextLogMessage)
-    {
-        return Logs.TryDequeue(out nextLogMessage);
-    }
-
-    public static void LogInfo(string format, object[] args = null, [CallerFilePathAttribute] string caller = null, [CallerLineNumber] int lineNumber = 0)
-    {
-        Log(ELogType.Info, format, args, caller, lineNumber);
-    }
-
-    public static void LogWarning(string format, object[] args = null, [CallerFilePathAttribute] string caller = null, [CallerLineNumber] int lineNumber = 0)
-    {
-        Log(ELogType.Warning, format, args, caller, lineNumber);
-    }
-
-    public static void LogError(string format, object[] args = null, [CallerFilePathAttribute] string caller = null, [CallerLineNumber] int lineNumber = 0)
-    {
-        Log(ELogType.Error, format, args, caller, lineNumber);
-    }
-}
-
 public class NetworkService
 {
     const int CHANNEL_BUFFER_SIZE = 2048;
-    const int SHUTDOWN_TIMEOUT = 2000; // milliseconds
+    const int SHUTDOWN_TIMEOUT    = 2000; // milliseconds
 
     enum EClientState
     {
@@ -135,8 +38,6 @@ public class NetworkService
     }
 
     volatile bool bIsServer;
-    public bool IsServer { get { return bIsServer; } }
-
     volatile Thread TcpThread;
     volatile Thread UdpThread;
 
@@ -153,7 +54,7 @@ public class NetworkService
     // Tcp packets will already arrive sorted (order is guaranteed), no additional sorting needed.
     // For udp packets, we're using timestamps to determine the order of the packet.
     ConcurrentQueue<byte[]> ReliableMessages = new ConcurrentQueue<byte[]>();
-    SortedConcurrentList<ulong, byte[]> UnreliableMessages = new SortedConcurrentList<ulong, byte[]>();
+    ConcurrentSortedList<ulong, byte[]> UnreliableMessages = new ConcurrentSortedList<ulong, byte[]>();
 
     // Message layout:
     // 2 bytes (ushort) - message length (number of bytes)
@@ -177,7 +78,7 @@ public class NetworkService
     {
         if (State != ENetworkState.Closed)
         {
-            ThreadLogging.LogWarning("Cannot start Server, we're already a {}!", new object[] { State });
+            LogQueue.LogWarning("Cannot start Server, we're already a {}!", new object[] { State });
             return false;
         }
 
@@ -223,7 +124,7 @@ public class NetworkService
     {
         if (State != ENetworkState.Closed)
         {
-            ThreadLogging.LogWarning("Cannot start Client, we're already a {}!", new object[] { State });
+            LogQueue.LogWarning("Cannot start Client, we're already a {}!", new object[] { State });
             return false;
         }
 
@@ -269,16 +170,21 @@ public class NetworkService
         return State;
     }
 
+    public bool IsServer()
+    {
+        return bIsServer;
+    }
+
     public bool Close()
     {
         if (State == ENetworkState.Closed)
         {
-            ThreadLogging.LogWarning("Cannot close networking, already closed!");
+            LogQueue.LogWarning("Cannot close networking, already closed!");
             return false;
         }
         if (State == ENetworkState.Shutdown)
         {
-            ThreadLogging.LogWarning("Cannot close networking, already shutting down...");
+            LogQueue.LogWarning("Cannot close networking, already shutting down...");
             return false;
         }
 
@@ -344,12 +250,12 @@ public class NetworkService
     {
         if (State != ENetworkState.Running)
         {
-            ThreadLogging.LogWarning("Cannot send message while not Running!");
+            LogQueue.LogWarning("Cannot send message while not Running!");
             return;
         }
         if (data.Length == 0)
         {
-            ThreadLogging.LogWarning("Cannot send empty message!");
+            LogQueue.LogWarning("Cannot send empty message!");
             return;
         }
 
@@ -362,13 +268,13 @@ public class NetworkService
             if (data.Length > MaxPaketSize)
             {
                 // TODO: if data is too large, split it up
-                ThreadLogging.LogError("Given message data of {0} bytes exceeds max message size of {1}", new object[] { data.Length, MaxPaketSize });
+                LogQueue.LogError("Given message data of {0} bytes exceeds max message size of {1}", new object[] { data.Length, MaxPaketSize });
                 return;
             }
 
             if (data.Length > CHANNEL_BUFFER_SIZE)
             {
-                ThreadLogging.LogWarning("Given message data of {0} bytes potentially exceeds receiving buffer size of {1}", new object[] { data.Length, MaxPaketSize });
+                LogQueue.LogWarning("Given message data of {0} bytes potentially exceeds receiving buffer size of {1}", new object[] { data.Length, MaxPaketSize });
             }
 
             ReliableSendBuffer.Enqueue(data);
@@ -383,13 +289,13 @@ public class NetworkService
             if (data.Length > MaxPaketSize)
             {
                 // TODO: if data is too large, split it up
-                ThreadLogging.LogError("Given message data of {0} bytes exceeds max message size of {1}", new object[] { data.Length, MaxPaketSize });
+                LogQueue.LogError("Given message data of {0} bytes exceeds max message size of {1}", new object[] { data.Length, MaxPaketSize });
                 return;
             }
 
             if (data.Length > CHANNEL_BUFFER_SIZE)
             {
-                ThreadLogging.LogWarning("Given message data of {0} bytes potentially exceeds receiving buffer size of {1}", new object[] { data.Length, MaxPaketSize });
+                LogQueue.LogWarning("Given message data of {0} bytes potentially exceeds receiving buffer size of {1}", new object[] { data.Length, MaxPaketSize });
             }
 
             UnreliableSendBuffer.Enqueue(data);
@@ -428,7 +334,7 @@ public class NetworkService
 
         void ConnectionLost()
         {
-             ThreadLogging.LogWarning("Connection lost");
+             LogQueue.LogWarning("Connection lost");
              Shutdown();
         }
 
@@ -448,7 +354,7 @@ public class NetworkService
                     }
                     catch (Exception e) 
                     {
-                        ThreadLogging.LogWarning(e.Message);
+                        LogQueue.LogWarning(e.Message);
                         Shutdown();
                         return;
                     }
@@ -463,7 +369,7 @@ public class NetworkService
                     }
                     catch (Exception e)
                     {
-                        ThreadLogging.LogWarning(e.Message);
+                        LogQueue.LogWarning(e.Message);
                         Shutdown();
                         return;
                     }
@@ -505,7 +411,7 @@ public class NetworkService
             }
             catch (Exception e)
             {
-                ThreadLogging.LogWarning(e.Message);
+                LogQueue.LogWarning(e.Message);
                 ConnectionLost();
                 return;
             }
@@ -514,7 +420,7 @@ public class NetworkService
                 int maxReadSize = CHANNEL_BUFFER_SIZE - ReliableReceiveBuffer.Head;
                 if (maxReadSize == 0)
                 {
-                    ThreadLogging.LogError("Ran out of receive buffer memory! Message too large?");
+                    LogQueue.LogError("Ran out of receive buffer memory! Message too large?");
                     ReliableReceiveBuffer.Head = 0;
                     Shutdown();
                     return;
@@ -524,11 +430,11 @@ public class NetworkService
                 try
                 {
                     bytesRead = stream.Read(ReliableReceiveBuffer.Buffer, ReliableReceiveBuffer.Head, maxReadSize);
-                    //ThreadLogging.LogInfo("Received {0} TCP bytes", new object[] { bytesRead });
+                    //LogQueue.LogInfo("Received {0} TCP bytes", new object[] { bytesRead });
                 }
                 catch (Exception e)
                 {
-                    ThreadLogging.LogWarning(e.Message);
+                    LogQueue.LogWarning(e.Message);
                     ConnectionLost();
                     return;
                 }
@@ -570,7 +476,7 @@ public class NetworkService
             }
             catch (Exception e)
             {
-                ThreadLogging.LogWarning(e.Message);
+                LogQueue.LogWarning(e.Message);
                 ConnectionLost();
                 return;
             }
@@ -591,7 +497,7 @@ public class NetworkService
                 }
                 catch (Exception e)
                 {
-                    ThreadLogging.LogWarning(e.Message);
+                    LogQueue.LogWarning(e.Message);
                     ConnectionLost();
                     return;
                 }
@@ -613,7 +519,7 @@ public class NetworkService
                     }
                     catch (SocketException e)
                     {
-                        ThreadLogging.LogWarning(e.Message);
+                        LogQueue.LogWarning(e.Message);
                         ClientStateUnreliable = EClientState.Disconnected;
                         return;
                     }
@@ -636,7 +542,7 @@ public class NetworkService
             int maxReadSize = CHANNEL_BUFFER_SIZE - UnreliableReceiveBuffer.Head;
             if (maxReadSize == 0)
             {
-                ThreadLogging.LogError("Ran out of receive buffer memory! Message too large?");
+                LogQueue.LogError("Ran out of receive buffer memory! Message too large?");
                 ReliableReceiveBuffer.Head = 0;
                 ClientStateUnreliable = EClientState.Disconnected;
                 return;
@@ -652,7 +558,7 @@ public class NetworkService
                 }
                 catch (Exception e) 
                 {
-                    ThreadLogging.LogWarning("UDP Receiving failed: " + e.Message);
+                    LogQueue.LogWarning("UDP Receiving failed: " + e.Message);
                     ClientStateUnreliable = EClientState.Disconnected;
                     return;
                 }
@@ -705,7 +611,7 @@ public class NetworkService
                 }
                 catch (Exception e)
                 {
-                    ThreadLogging.LogWarning(e.Message);
+                    LogQueue.LogWarning(e.Message);
                     ClientStateUnreliable = EClientState.Disconnected;
                     return;
                 }
