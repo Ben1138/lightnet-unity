@@ -1,8 +1,17 @@
 ﻿using System;
-using System.Collections;
 using System.Net;
 using UnityEngine;
 
+
+public class ConnectionEventArgs : EventArgs
+{
+    public ConnectionHandle Handle;
+
+    public ConnectionEventArgs(ConnectionHandle handle)
+    {
+        Handle = handle;
+    }
+}
 
 public class ReceivedUserStateEventArgs : EventArgs
 {
@@ -14,8 +23,10 @@ public class ReceivedUserStateEventArgs : EventArgs
     }
 }
 
-public class Networking : MonoBehaviour
+public class NetworkComponent : MonoBehaviour
 {
+    public EventHandler<ConnectionEventArgs> OnClientConnected;
+    public EventHandler<ConnectionEventArgs> OnClientDisconnected;
     public EventHandler<ReceivedUserStateEventArgs> OnUserStateReceived;
     NetworkService Net = new NetworkService();
 
@@ -30,9 +41,20 @@ public class Networking : MonoBehaviour
         return Net.IsServer();
     }
 
+    public string[] GetConnectionNames()
+    {
+        ConnectionHandle[] conns = Net.GetConnections();
+        string[] names = new string[conns.Length];
+        for (int i = 0; i < conns.Length; ++i)
+        {
+            names[i] = Net.GetConnectionName(conns[i]);
+        }
+        return names;
+    }
+
     public bool StartAsServer()
     {
-        return Net.StartServer(42069, 42169);
+        return Net.StartServer(42069, 42169, 10);
     }
 
     public bool StartAsClient(string ip)
@@ -59,7 +81,7 @@ public class Networking : MonoBehaviour
             return;
         }
 
-        Net.SendMessage(ENetChannel.Unreliable, userState.Serialize());
+        Net.BroadcastMessage(ENetChannel.Unreliable, userState.Serialize());
     }
 
     void Update()
@@ -81,14 +103,30 @@ public class Networking : MonoBehaviour
             }
         }
 
+        while (Net.GetNextEvent(out ConnectionEvent e))
+        {
+            switch (e.EventType)
+            {
+                case ConnectionEvent.EType.Connected:
+                    OnClientConnected?.Invoke(this, new ConnectionEventArgs(e.Connection));
+                    break;
+                case ConnectionEvent.EType.Disconnected:
+                    OnClientDisconnected?.Invoke(this, new ConnectionEventArgs(e.Connection));
+                    break;
+            }
+        }
+
         if (Net.GetState() == ENetworkState.Running)
         {
             byte[] last = null;
 
             // we're only interested in the most recent one
-            while (Net.GetNextMessage(ENetChannel.Unreliable, out byte[] data)) 
+            while (Net.GetNextMessage(out byte[] message, out ConnectionHandle connection, out ENetChannel channel)) 
             {
-                last = data;
+                if (channel == ENetChannel.Unreliable)
+                {
+                    last = message;
+                }
             }
 
             if (last != null && last.Length > 0)
@@ -102,5 +140,10 @@ public class Networking : MonoBehaviour
                 }
             }
         }
+    }
+
+    void OnApplicationQuit()
+    {
+        Net.Close();
     }
 }

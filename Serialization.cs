@@ -65,7 +65,14 @@ public enum ENetDataType : byte
     ExperimentState = 2
 }
 
-public class UserState
+
+public interface NetworkData
+{
+    byte[] Serialize();
+    void Deserialize(byte[] data);
+}
+
+public class UserState : NetworkData
 {
     const int SIZE =
         // NOTE: using e.g. sizeof(Vector3) is not allowed...
