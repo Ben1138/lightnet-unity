@@ -91,16 +91,16 @@ public class UserState : NetworkData
         sizeof(float) * 4;      // Quaternion HandRightRotation;
 
 
-    public float LeverPosition;
-    public Vector3 CannonPosition;
-    public Quaternion CannonRotation;
+    public float        LeverPosition;
+    public Vector3      CannonPosition;
+    public Quaternion   CannonRotation;
 
-    public Vector3 HeadPosition;
-    public Quaternion HeadRotation;
-    public Vector3 HandLeftPosition;
-    public Quaternion HandLeftRotation;
-    public Vector3 HandRightPosition;
-    public Quaternion HandRightRotation;
+    public Vector3      HeadPosition;
+    public Quaternion   HeadRotation;
+    public Vector3      HandLeftPosition;
+    public Quaternion   HandLeftRotation;
+    public Vector3      HandRightPosition;
+    public Quaternion   HandRightRotation;
 
 
     public void Deserialize(byte[] data)
