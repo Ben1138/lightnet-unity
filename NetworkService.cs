@@ -1,12 +1,10 @@
 ﻿using System;
-using System.Linq;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using UnityEngine;
-using Stopwatch = System.Diagnostics.Stopwatch;
 
 
 public enum ENetChannel
@@ -78,7 +76,7 @@ public class NetworkService
     const int PING_INTERVAL = 1000;
 
     // Seconds. Timeout when to deem a connection as lost after not receiving any ping
-    const double PING_TIMEOUT = 4.0;
+    const double PING_TIMEOUT = 5.0;
 
 
     // Internal header for all reliable packages
@@ -96,6 +94,8 @@ public class NetworkService
 
     volatile ENetworkState State = ENetworkState.Closed;
     volatile bool bShutdown = true;
+    volatile int NetworkErrorEmulationLevel = 0;    // 0 - 100
+    volatile int NetworkErrorEmulationDelay = 0;    // milliseconds
 
     volatile TcpListener Server;
     volatile UdpClient UnreliableReceive;
@@ -108,6 +108,8 @@ public class NetworkService
 
     ConcurrentDictionary<ulong, Connection> Connections = new ConcurrentDictionary<ulong, Connection>();
     ConcurrentQueue<ConnectionEvent> Events = new ConcurrentQueue<ConnectionEvent>();
+
+    static readonly System.Random Rand = new System.Random();
 
 
     ~NetworkService()
@@ -249,6 +251,20 @@ public class NetworkService
         UnreliableReceive = null;
 
         return true;
+    }
+
+    /// <summary>
+    /// Emulate bad network via loosing some packages intentionally and delaying their delivery
+    /// </summary>
+    /// <param name="looseLevel">0 = no packages get lost, 100 = all packages get lost</param>
+    /// <param name="maxSendDelay">
+    /// maximum delay to wait before sending/receiving a package in milliseconds
+    /// (will be chosen randomly for each package between 0 and maxSendDelay)
+    /// </param>
+    public void SetNetworkErrorEmulation(int looseLevel, int maxSendDelay)
+    {
+        NetworkErrorEmulationLevel = Mathf.Clamp(looseLevel, 0, 100);
+        NetworkErrorEmulationDelay = Mathf.Min(maxSendDelay, 0);
     }
 
     public ConnectionHandle[] GetConnections()
@@ -1103,6 +1119,7 @@ public class NetworkService
                     byte[] messageData;
                     while (ReliableSendBuffer.TryDequeue(out messageData))
                     {
+                        Thread.Sleep(Rand.Next(0, Owner.NetworkErrorEmulationDelay));
                         try
                         {
                             //LogQueue.LogInfo("Sending {0}", new object[] { ((EMessageType)messageData[0]).ToString() });
@@ -1176,16 +1193,20 @@ public class NetworkService
                             Array.Copy(msgLength, 0, sendData, offset, msgLength.Length);       offset += msgLength.Length;
                             Array.Copy(messageData, 0, sendData, offset, messageData.Length);
 
-                            try
+                            if (Rand.Next(0, 100) > Owner.NetworkErrorEmulationLevel)
                             {
-                                UnrealiableSend.Send(sendData, sendData.Length);
-                                //LogQueue.LogInfo("Sending UDP package: {0}", new object[] { sendData.Length });
-                            }
-                            catch (Exception e)
-                            {
-                                LogQueue.LogWarning(e.Message);
-                                Reliable.Close();
-                                return;
+                                Thread.Sleep(Rand.Next(0, Owner.NetworkErrorEmulationDelay));
+                                try
+                                {
+                                    UnrealiableSend.Send(sendData, sendData.Length);
+                                    //LogQueue.LogInfo("Sending UDP package: {0}", new object[] { sendData.Length });
+                                }
+                                catch (Exception e)
+                                {
+                                    LogQueue.LogWarning(e.Message);
+                                    Reliable.Close();
+                                    return;
+                                }
                             }
                         }
                     }

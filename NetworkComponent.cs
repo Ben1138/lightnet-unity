@@ -31,6 +31,11 @@ public class NetworkComponent : MonoBehaviour
     NetworkService Net = new NetworkService();
 
 
+    void Start()
+    {
+        //Net.SetNetworkErrorEmulation(90, 1000);
+    }
+
     public ENetworkState GetState()
     {
         return Net.GetState();
