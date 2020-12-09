@@ -1,11 +1,12 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using UnityEngine;
-using System.Collections;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 
 public enum ENetChannel
@@ -66,8 +67,30 @@ public struct ConnectionEvent
 
 public class NetworkService
 {
+    // This should be enough for most cases. 
+    // Increase in case of 'Ran out of receive buffer memory!' error.
     const int CHANNEL_BUFFER_SIZE = 2048;
-    const int SHUTDOWN_TIMEOUT = 2000; // milliseconds
+
+    // Milliseconds
+    const int SHUTDOWN_TIMEOUT = 2000;
+
+    // Milliseconds
+    const int PING_INTERVAL = 1000;
+
+    // Seconds. Timeout when to deem a connection as lost after not receiving any ping
+    const double PING_TIMEOUT = 4.0;
+
+
+    // Internal header for all reliable packages
+    enum EMessageType : byte
+    {
+        INVALID = 0,
+        Ping,
+        Disconnect,
+        ClientInfo,
+        Message
+    }
+
 
     public volatile ENetworkEventReportFlags EventFlags = ENetworkEventReportFlags.ConnectionStatus;
 
@@ -112,15 +135,27 @@ public class NetworkService
         while (Events.TryDequeue(out ConnectionEvent e)) { }
 
         Server = new TcpListener(new IPEndPoint(IPAddress.Any, portReliable));
-        Server.Start(maxClients);
+        try
+        {
+            // will fail if the port is already occupied
+            Server.Start(maxClients);
+        }
+        catch (Exception e)
+        {
+            LogQueue.LogWarning(e.Message);
+            Server.Stop();
+            Server = null;
+            State = ENetworkState.Closed;
+            return false;
+        }
         UnreliableReceive = new UdpClient(portUnreliable);
 
         bShutdown = false;
         NetThread = new Thread(ServerThreadFunc);
-        NetThread.Name = "Lightnet - Server Thread";
+        NetThread.Name = "Lightnet_ServerThread";
         NetThread.Start();
-        State = ENetworkState.Running;
 
+        State = ENetworkState.Running;
         return true;
     }
 
@@ -144,7 +179,7 @@ public class NetworkService
 
         bShutdown = false;
         NetThread = new Thread(ClientThreadFunc);
-        NetThread.Name = "Lightnet - Client Thread";
+        NetThread.Name = "Lightnet_ClientThread";
         NetThread.Start();
 
         return true;
@@ -178,24 +213,34 @@ public class NetworkService
         Debug.Assert(NetThread.IsAlive);
 
         State = ENetworkState.Shutdown;
+        foreach (KeyValuePair<ulong, Connection> conn in Connections)
+        {
+            conn.Value.SendDisconnect();
+        }
         bShutdown = true;
 
-        void AbortThread()
+        void AbortThreads()
         {
             foreach (KeyValuePair<ulong, Connection> conn in Connections)
             {
                 conn.Value.Shutdown();
             }
             Connections.Clear();
-            if (!NetThread.Join(SHUTDOWN_TIMEOUT))
+
+            // Do not join NetThread if we ARE the NetThread
+            if (Thread.CurrentThread != NetThread)
             {
-                NetThread.Abort();
+                if (!NetThread.Join(SHUTDOWN_TIMEOUT))
+                {
+                    NetThread.Abort();
+                }
+                NetThread = null;
             }
-            NetThread = null;
+
             State = ENetworkState.Closed;
         }
 
-        Thread abortThread = new Thread(AbortThread);
+        Thread abortThread = new Thread(AbortThreads);
         abortThread.Start();
 
         Server?.Stop();
@@ -227,6 +272,11 @@ public class NetworkService
         return Connections[handle.GetInternalHandle()].ToString();
     }
 
+    public bool IsConnected(ConnectionHandle handle)
+    {
+        return handle.IsValid() && Connections.ContainsKey(handle.GetInternalHandle()) && Connections[handle.GetInternalHandle()].IsAlive();
+    }
+
     public bool GetNextEvent(out ConnectionEvent outEvent)
     {
         return Events.TryDequeue(out outEvent);
@@ -248,7 +298,10 @@ public class NetworkService
     {
         foreach (KeyValuePair<ulong, Connection> conn in Connections)
         {
-            conn.Value.SendMessage(channel, message);
+            if (conn.Value.IsAlive())
+            {
+                conn.Value.SendMessage(channel, message);
+            }
         }
     }
 
@@ -419,19 +472,8 @@ public class NetworkService
                 if (!Connections.TryAdd(handle, conn))
                 {
                     LogQueue.LogError("Connection handles are inconsistent! This should never happen!");
-                    continue;
-                }
-
-                {
-                    // FIRST thing to send to our new client is the handle we are giving them.
-                    // This is necessary to later resolve an incoming UDP package to a specific connection
-                    int offset = 0;
-                    byte[] portBytes = BitConverter.GetBytes(clientListenPort);
-                    byte[] handleBytes = BitConverter.GetBytes(handle);
-                    byte[] sendData = new byte[portBytes.Length + handleBytes.Length];
-                    Array.Copy(portBytes, 0, sendData, 0, portBytes.Length); offset += portBytes.Length;
-                    Array.Copy(handleBytes, 0, sendData, offset, handleBytes.Length);
-                    conn.SendMessage(ENetChannel.Reliable, sendData);
+                    Close();
+                    return;
                 }
 
                 LogQueue.LogInfo("New client '{0}' joined (handle: {1})", new object[] { address.ToString(), handle });
@@ -446,7 +488,10 @@ public class NetworkService
             {
                 if (!conn.Value.IsAlive())
                 {
-                    LogQueue.LogInfo("Connection to '{0}' lost!", new object[] { conn.Value.GetRemoteAddress().ToString() });
+                    if (!conn.Value.IntentionalDisconnect())
+                    {
+                        LogQueue.LogInfo("Connection to '{0}' lost!", new object[] { conn.Value.GetRemoteAddress().ToString() });
+                    }
                     conn.Value.Shutdown();
                     if (!Connections.TryRemove(conn.Key, out Connection c))
                     {
@@ -466,13 +511,6 @@ public class NetworkService
 
     void ClientThreadFunc()
     {
-        void Close()
-        {
-            UnreliableReceive?.Close();
-            UnreliableReceive = null;
-            State = ENetworkState.Closed;
-        }
-
         const ulong handle = 1;
 
         Debug.Assert(Server == null);
@@ -510,7 +548,10 @@ public class NetworkService
         {
             if (!Connections[handle].IsAlive())
             {
-                LogQueue.LogWarning("Connection to Server '{0}' lost!", new object[] { Connections[handle].GetRemoteAddress().ToString() });
+                if (!Connections[handle].IntentionalDisconnect())
+                {
+                    LogQueue.LogWarning("Connection to Server '{0}' lost!", new object[] { Connections[handle].GetRemoteAddress().ToString() });
+                }
                 Connections[handle].Shutdown();
                 Connections.Clear();
 
@@ -556,15 +597,14 @@ public class NetworkService
             Debug.Assert(data != null);
             Debug.Assert(sender != null);
 
-            LogQueue.LogInfo("Received UDP package: {0}", new object[] { data.Length });
+            //LogQueue.LogInfo("Received UDP package: {0}", new object[] { data.Length });
 
             int offset = 0;
             if (Server != null)
             {
                 // for servers, we expect the clients to always send a ulong
                 // beforehand, specifying the connection handle we assigned to them
-                ulong handle = BitConverter.ToUInt64(data, 0);
-                offset += sizeof(ulong);
+                ulong handle = BitConverter.ToUInt64(data, 0);      offset += sizeof(ulong);
                 connection = Connections[handle];
             }
             else
@@ -604,11 +644,14 @@ public class NetworkService
         ulong Handle = 0;
         ulong RemoteHandle = 0;
 
+        volatile bool bIntentionalDisconnect;
         volatile bool bShutdown = false;
         volatile Thread ConnectionThread;
         volatile TcpClient Reliable;
+        Thread PingThread;
         UdpClient UnrealiableSend;
         ulong UnreliableTime = 0;
+        DateTime LastPing;
 
         object AliveLock = new object();
         object UnreliableReceiveLock = new object();
@@ -635,7 +678,6 @@ public class NetworkService
 
         IPEndPoint RemoteReliable;
         IPEndPoint RemoteUnreliable;
-        IPEndPoint LocalUnreliable;
 
         public Connection(NetworkService owner, ulong handle, IPAddress address, int portReliable, int portUnreliable, TcpClient client)
         {
@@ -649,10 +691,23 @@ public class NetworkService
             RemoteUnreliable = new IPEndPoint(address, portUnreliable);
 
             Reliable = client;
+            LastPing = DateTime.Now;
 
             ConnectionThread = new Thread(ConnectionThreadFunc);
-            ConnectionThread.Name = "Lightnet - " + ToString();
+            ConnectionThread.Name = "Lightnet_" + ToString();
             ConnectionThread.Start();
+
+            if (Owner.Server != null)
+            {
+                // Server only:
+                // FIRST thing to send to our new client is the handle we are giving them.
+                // This is necessary to later resolve an incoming UDP package to a specific connection
+                SendClientInfo();
+            }
+
+            PingThread = new Thread(Ping);
+            PingThread.Name = "Lightnet_Ping_" + ToString();
+            PingThread.Start();
         }
 
         ~Connection()
@@ -673,9 +728,14 @@ public class NetworkService
             bool bAlive = false;
             lock (AliveLock)
             {
-                bAlive = Reliable.Connected && ConnectionThread.IsAlive;
+                bAlive = !bIntentionalDisconnect && Reliable.Connected && ConnectionThread.IsAlive;
             }
             return bAlive;
+        }
+
+        public bool IntentionalDisconnect()
+        {
+            return bIntentionalDisconnect;
         }
 
         public ReceiveBuffer GetUnreliableReceiveBuffer()
@@ -702,6 +762,14 @@ public class NetworkService
                 LogQueue.LogWarning("Shutdown timeout, aborting connection thread...");
                 ConnectionThread.Abort();
             }
+
+            if (!PingThread.Join(SHUTDOWN_TIMEOUT))
+            {
+                LogQueue.LogWarning("Shutdown timeout, aborting ping thread...");
+                PingThread.Abort();
+            }
+            PingThread = null;
+
             Reliable.Close();
             UnrealiableSend.Close();
         }
@@ -773,7 +841,17 @@ public class NetworkService
                     LogQueue.LogWarning("Given message data of {0} bytes potentially exceeds receiving buffer size of {1}", new object[] { data.Length, MaxPaketSize });
                 }
 
-                ReliableSendBuffer.Enqueue(data);
+                // add prefixes:
+                //   uint8   -  EMessageType.Message
+                //   uint16  -  message size
+                int offset = 0;
+                byte[] sendData = new byte[sizeof(byte) + sizeof(ushort) + data.Length];
+                byte[] msgLength = BitConverter.GetBytes((ushort)data.Length);
+                sendData[0] = (byte)EMessageType.Message;                       offset += sizeof(byte);
+                Array.Copy(msgLength, 0, sendData, offset, msgLength.Length);   offset += msgLength.Length;
+                Array.Copy(data, 0, sendData, offset, data.Length);
+
+                ReliableSendBuffer.Enqueue(sendData);
             }
             else if (channel == ENetChannel.Unreliable)
             {
@@ -803,6 +881,44 @@ public class NetworkService
             return string.Format("{0}:{1}:{2} - {3}", RemoteReliable.Address.ToString(), RemoteReliable.Port, RemoteUnreliable.Port, IsAlive() ? "Alive" : "Dead");
         }
 
+        public void SendDisconnect()
+        {
+            ReliableSendBuffer.Enqueue(new byte[1] { (byte)EMessageType.Disconnect });
+        }
+
+        public void SendPing()
+        {
+            ReliableSendBuffer.Enqueue(new byte[1] { (byte)EMessageType.Ping });
+        }
+
+        public void SendClientInfo()
+        {
+            // layout:
+            //   uint8   -  EMessageType.ClientInfo
+            //   int32   -  unreliable port
+            //   uint64  -  handle
+
+            int offset = 0;
+            byte[] portBytes = BitConverter.GetBytes(RemoteUnreliable.Port);
+            byte[] handleBytes = BitConverter.GetBytes(Handle);
+            byte[] sendData = new byte[sizeof(byte) + portBytes.Length + handleBytes.Length];
+            sendData[0] = (byte)EMessageType.ClientInfo;                        offset += sizeof(byte);
+            Array.Copy(portBytes, 0, sendData, offset, portBytes.Length);       offset += portBytes.Length;
+            Array.Copy(handleBytes, 0, sendData, offset, handleBytes.Length);
+
+            ReliableSendBuffer.Enqueue(sendData);
+        }
+
+        void Ping()
+        {
+            while (!bShutdown)
+            {
+                SendPing();
+                //LogQueue.LogInfo("Send ping to: {0}", new object[] { ToString() });
+                Thread.Sleep(PING_INTERVAL);
+            }
+        }
+
         void ConnectionThreadFunc()
         {
             Debug.Assert(UnrealiableSend == null);
@@ -811,11 +927,6 @@ public class NetworkService
 
             UnrealiableSend = new UdpClient();
             UnrealiableSend.Connect(RemoteUnreliable);
-            
-            // If we're a client, we expect a special message as first message
-            // This message (8 bytes) contains the connection handle we've
-            // been assigned from the server.
-            bool bFirstMessage = Owner.Server == null;
 
             while (!bShutdown)
             {
@@ -846,7 +957,7 @@ public class NetworkService
                         Reliable.Close();
                         return;
                     }
-                    while (stream.DataAvailable)
+                    while (stream.CanRead && stream.DataAvailable)
                     {
                         int maxReadSize = CHANNEL_BUFFER_SIZE - ReliableReceiveBuffer.Head;
                         if (maxReadSize == 0)
@@ -861,6 +972,15 @@ public class NetworkService
                         try
                         {
                             bytesRead = stream.Read(ReliableReceiveBuffer.Buffer, ReliableReceiveBuffer.Head, maxReadSize);
+
+                            // according to docs, connection is lost when 'Read' immediately terminates and returns 0 bytes
+                            // (usually, 'Read' blocks until there are bytes available)
+                            if (bytesRead == 0)
+                            {
+                                LogQueue.LogWarning("Connection to '{0}' lost!", new object[] { RemoteReliable.Address.ToString() });
+                                Reliable.Close();
+                                return;
+                            }
                             //LogQueue.LogInfo("Received {0} TCP bytes", new object[] { bytesRead });
                         }
                         catch (Exception e)
@@ -871,54 +991,100 @@ public class NetworkService
                         }
                         ReliableReceiveBuffer.Head += bytesRead;
 
-                        ushort msgSize;
-                        if (ReliableReceiveBuffer.Head >= sizeof(ushort))
+                        if (ReliableReceiveBuffer.Head >= sizeof(byte))
                         {
                             int offset = 0;
-                            msgSize = BitConverter.ToUInt16(ReliableReceiveBuffer.Buffer, 0); offset += sizeof(ushort);
-                            if (ReliableReceiveBuffer.Head >= sizeof(ushort) + msgSize)
+                            EMessageType msgType = (EMessageType)ReliableReceiveBuffer.Buffer[0];   offset += sizeof(byte);
+                            bool bResetBuffer = true;
+
+
+                            switch (msgType)
                             {
-                                // The first message is ALWAYS a ulong specifying our connection handle on the other end. 
-                                // This is necessary to differentiate between multiple UDP senders.
-                                if (bFirstMessage)
+                                case EMessageType.Ping:
                                 {
-                                    int localUnreliablePort = BitConverter.ToInt32(ReliableReceiveBuffer.Buffer, offset);
-                                    offset += sizeof(int);
-                                    RemoteHandle = BitConverter.ToUInt64(ReliableReceiveBuffer.Buffer, offset);
-                                    Debug.Assert(RemoteHandle != 0);
-                                    ReliableReceiveBuffer.Head = 0;
-                                    Owner.UnreliableReceive = new UdpClient(localUnreliablePort);
-                                    bFirstMessage = false;
+                                    //LogQueue.LogInfo("Received ping from'{0}'", new object[] { RemoteReliable.Address.ToString() });
+                                    LastPing = DateTime.Now;
+                                    break;
                                 }
-                                else
-                                {
-                                    // copy message from receive buffer into message queue
-                                    byte[] message = new byte[msgSize];
-                                    Array.Copy(ReliableReceiveBuffer.Buffer, offset, message, 0, msgSize);
-                                    ReceivedReliableMessages.Enqueue(message);
 
-                                    if ((Owner.EventFlags & ENetworkEventReportFlags.ReceivedMessage) != 0)
+                                case EMessageType.Disconnect:
+                                {
+                                    LogQueue.LogInfo("'{0}' disconnected.", new object[] { RemoteReliable.Address.ToString() });
+                                    bIntentionalDisconnect = true;
+                                    Reliable.Close();
+                                    return;
+                                }
+
+                                case EMessageType.ClientInfo:
+                                {
+                                    if (ReliableReceiveBuffer.Head >= sizeof(byte) + sizeof(int) + sizeof(ulong))
                                     {
-                                        Owner.AddEvent(new ConnectionEvent
+                                        // This message type should only be received as client!
+                                        Debug.Assert(Owner.Server == null);
+
+                                        int localUnreliablePort = BitConverter.ToInt32(ReliableReceiveBuffer.Buffer, offset); offset += sizeof(int);
+                                        RemoteHandle = BitConverter.ToUInt64(ReliableReceiveBuffer.Buffer, offset);
+                                        Debug.Assert(RemoteHandle != 0);
+                                        Owner.UnreliableReceive = new UdpClient(localUnreliablePort);
+
+                                        LogQueue.LogInfo("Received ClientInfo from'{0}'", new object[] { RemoteReliable.Address.ToString() });
+                                    }
+                                    else
+                                    {
+                                        // do nothing if not the whole message has been received yet
+                                        bResetBuffer = false;
+                                    }
+                                    break;
+                                }
+
+                                case EMessageType.Message:
+                                {
+                                    ushort msgSize = BitConverter.ToUInt16(ReliableReceiveBuffer.Buffer, offset); offset += sizeof(ushort);
+                                    if (ReliableReceiveBuffer.Head >= sizeof(byte) + sizeof(ushort) + msgSize)
+                                    {
+                                        // copy message from receive buffer into message queue
+                                        byte[] message = new byte[msgSize];
+                                        Array.Copy(ReliableReceiveBuffer.Buffer, offset, message, 0, msgSize);
+
+                                        ReceivedReliableMessages.Enqueue(message);
+                                        if ((Owner.EventFlags & ENetworkEventReportFlags.ReceivedMessage) != 0)
                                         {
-                                            Connection = new ConnectionHandle(Handle),
-                                            EventType = ConnectionEvent.EType.ReceivedMessage
-                                        }, ENetworkEventReportFlags.ReceivedMessage);
+                                            Owner.AddEvent(new ConnectionEvent
+                                            {
+                                                Connection = new ConnectionHandle(Handle),
+                                                EventType = ConnectionEvent.EType.ReceivedMessage
+                                            }, ENetworkEventReportFlags.ReceivedMessage);
+                                        }
                                     }
-
-                                    // from https://docs.microsoft.com/en-us/dotnet/api/system.array.copy?view=net-5.0 :
-                                    // If sourceArray and destinationArray overlap, this method behaves as if the original values of sourceArray 
-                                    // were preserved in a temporary location before destinationArray is overwritten.
-                                    int remanining = CHANNEL_BUFFER_SIZE - ReliableReceiveBuffer.Head;
-                                    if (remanining > 0)
+                                    else
                                     {
-                                        // shift the buffer to the left
-                                        // TODO: maybe do a ringbuffer instead? Although, we'd also need two memcpy operations in case of edge overlap
-                                        Array.Copy(ReliableReceiveBuffer.Buffer, ReliableReceiveBuffer.Head, ReliableReceiveBuffer.Buffer, 0, remanining);
+                                        // do nothing if not the whole message has been received yet
+                                        bResetBuffer = false;
                                     }
-                                    ReliableReceiveBuffer.Head = 0;
+                                    break;
                                 }
-                            }                            
+
+                                default:
+                                {
+                                    LogQueue.LogError("Received message with invalid/unknown message type '{0}'! Ignoring...", new object[] { (byte)msgType });
+                                    break;
+                                }
+                            }
+
+                            if (bResetBuffer)
+                            {
+                                // from https://docs.microsoft.com/en-us/dotnet/api/system.array.copy?view=net-5.0 :
+                                // If sourceArray and destinationArray overlap, this method behaves as if the original values of sourceArray 
+                                // were preserved in a temporary location before destinationArray is overwritten.
+                                int remaning = CHANNEL_BUFFER_SIZE - ReliableReceiveBuffer.Head;
+                                if (remaning > 0)
+                                {
+                                    // shift the buffer to the left
+                                    // TODO: maybe do a ringbuffer instead? Although, we'd also need two memcpy operations in case of edge overlap
+                                    Array.Copy(ReliableReceiveBuffer.Buffer, ReliableReceiveBuffer.Head, ReliableReceiveBuffer.Buffer, 0, remaning);
+                                }
+                                ReliableReceiveBuffer.Head = 0;
+                            }                         
                         }
                     }
 
@@ -937,16 +1103,10 @@ public class NetworkService
                     byte[] messageData;
                     while (ReliableSendBuffer.TryDequeue(out messageData))
                     {
-                        byte[] msgLength = BitConverter.GetBytes((ushort)messageData.Length);
-                        byte[] sendData = new byte[sizeof(ushort) + messageData.Length];
-
-                        int offset = 0;
-                        Array.Copy(msgLength, 0, sendData, offset, msgLength.Length); offset += msgLength.Length;
-                        Array.Copy(messageData, 0, sendData, offset, messageData.Length);
-
                         try
                         {
-                            stream.Write(sendData, 0, sendData.Length);
+                            //LogQueue.LogInfo("Sending {0}", new object[] { ((EMessageType)messageData[0]).ToString() });
+                            stream.Write(messageData, 0, messageData.Length);
                         }
                         catch (Exception e)
                         {
@@ -967,8 +1127,8 @@ public class NetworkService
                         if (UnreliableReceiveBuffer.Head >= sizeof(ulong) + sizeof(ushort))
                         {
                             int offset = 0;
-                            timestamp = BitConverter.ToUInt64(UnreliableReceiveBuffer.Buffer, offset); offset += sizeof(ulong);
-                            msgSize = BitConverter.ToUInt16(UnreliableReceiveBuffer.Buffer, offset); offset += sizeof(ushort);
+                            timestamp = BitConverter.ToUInt64(UnreliableReceiveBuffer.Buffer, offset);  offset += sizeof(ulong);
+                            msgSize = BitConverter.ToUInt16(UnreliableReceiveBuffer.Buffer, offset);    offset += sizeof(ushort);
 
                             if (UnreliableReceiveBuffer.Head >= offset + msgSize)
                             {
@@ -996,36 +1156,46 @@ public class NetworkService
                     }
 
                     // SENDING - UDP
-                    byte[] messageData;
-                    while (UnreliableSendBuffer.TryDequeue(out messageData))
+                    if (Owner.Server != null || RemoteHandle > 0)
                     {
-                        byte[] timestamp = BitConverter.GetBytes(UnreliableTime++);
-                        byte[] msgLength = BitConverter.GetBytes((ushort)messageData.Length);
-                        byte[] sendData = new byte[(Owner.Server == null ? sizeof(ulong) : 0) + sizeof(ulong) + sizeof(ushort) + messageData.Length];
+                        byte[] messageData;
+                        while (UnreliableSendBuffer.TryDequeue(out messageData))
+                        {
+                            byte[] timestamp = BitConverter.GetBytes(UnreliableTime++);
+                            byte[] msgLength = BitConverter.GetBytes((ushort)messageData.Length);
+                            byte[] sendData = new byte[(Owner.Server == null ? sizeof(ulong) : 0) + sizeof(ulong) + sizeof(ushort) + messageData.Length];
 
-                        int offset = 0;
-                        if (Owner.Server == null)
-                        {
-                            // if we're a client, always send the connection handle we've been assigned to by the server
-                            byte[] handle = BitConverter.GetBytes(RemoteHandle);
-                            Array.Copy(handle, 0, sendData, offset, handle.Length); offset += handle.Length;
-                        }
-                        Array.Copy(timestamp, 0, sendData, offset, timestamp.Length); offset += timestamp.Length;
-                        Array.Copy(msgLength, 0, sendData, offset, msgLength.Length); offset += msgLength.Length;
-                        Array.Copy(messageData, 0, sendData, offset, messageData.Length);
+                            int offset = 0;
+                            if (Owner.Server == null)
+                            {
+                                // if we're a client, always send the connection handle we've been assigned to by the server
+                                byte[] handle = BitConverter.GetBytes(RemoteHandle);
+                                Array.Copy(handle, 0, sendData, offset, handle.Length);         offset += handle.Length;
+                            }
+                            Array.Copy(timestamp, 0, sendData, offset, timestamp.Length);       offset += timestamp.Length;
+                            Array.Copy(msgLength, 0, sendData, offset, msgLength.Length);       offset += msgLength.Length;
+                            Array.Copy(messageData, 0, sendData, offset, messageData.Length);
 
-                        try
-                        {
-                            UnrealiableSend.Send(sendData, sendData.Length);
-                            LogQueue.LogInfo("Sending UDP package: {0}", new object[] { sendData.Length });
-                        }
-                        catch (Exception e)
-                        {
-                            LogQueue.LogWarning(e.Message);
-                            Reliable.Close();
-                            return;
+                            try
+                            {
+                                UnrealiableSend.Send(sendData, sendData.Length);
+                                //LogQueue.LogInfo("Sending UDP package: {0}", new object[] { sendData.Length });
+                            }
+                            catch (Exception e)
+                            {
+                                LogQueue.LogWarning(e.Message);
+                                Reliable.Close();
+                                return;
+                            }
                         }
                     }
+                }
+
+                if ((DateTime.Now - LastPing).TotalSeconds >= PING_TIMEOUT)
+                {
+                    LogQueue.LogWarning("Connection to '{0}' lost due to ping timeout!", new object[] { RemoteReliable.Address.ToString() });
+                    Reliable.Close();
+                    return;
                 }
             }
         }
