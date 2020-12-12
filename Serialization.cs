@@ -72,13 +72,14 @@ public interface NetworkData
     void Deserialize(byte[] data);
 }
 
-public enum ExperimentStatus
+public enum EExperimentStatus
 {
-    Waiting, //Waiting for other participant
-    WarmUp, // Potential Countdown until something happens
-    Running, // Information is send and received , experiment runs
-    End // Participants might see and move, relevant things stop working, potential state switch
+    Waiting,  // Waiting for other participant
+    WarmUp,   // Potential Countdown until something happens
+    Running,  // Information is send and received , experiment runs
+    End       // Participants might see and move, relevant things stop working, potential state switch
 }
+
 public class ExperimentState : NetworkData
 {
     private const int SIZE =
@@ -86,18 +87,17 @@ public class ExperimentState : NetworkData
         sizeof(byte); //ExperimentState
     public byte socketNumber;
 
-    public ExperimentStatus experimentStatus;
+    public EExperimentStatus Status;
+    byte[] Cache = new byte[SIZE];
         
     public byte[] Serialize()
     {
-        byte[] data = new byte[SIZE];
-
         int offset = 0;
-        data[offset] = (byte)ENetDataType.ExperimentState; offset += sizeof(byte);
-        data[offset] = socketNumber;
+        Cache[offset] = (byte)ENetDataType.ExperimentState; offset += sizeof(byte);
+        Cache[offset] = socketNumber;
         offset += sizeof(byte);
-        data[offset] = (byte) experimentStatus;
-        return data;
+        Cache[offset] = (byte) Status;
+        return Cache;
     }
 
     public void Deserialize(byte[] data)
@@ -107,7 +107,7 @@ public class ExperimentState : NetworkData
         offset += sizeof(byte);
         socketNumber = data[offset];
         offset += sizeof(byte);
-        experimentStatus = (ExperimentStatus) data[offset];
+        Status = (EExperimentStatus) data[offset];
     }
 }
 public class UserState : NetworkData
@@ -140,6 +140,8 @@ public class UserState : NetworkData
     public Vector3      HandRightPosition;
     public Quaternion   HandRightRotation;
 
+    byte[] Cache = new byte[SIZE];
+
 
     public void Deserialize(byte[] data)
     {
@@ -161,21 +163,19 @@ public class UserState : NetworkData
 
     public byte[] Serialize()
     {
-        byte[] data = new byte[SIZE];
-
         int head = 0;
-        data[head] = (byte)ENetDataType.UserState; head += sizeof(byte);
+        Cache[head] = (byte)ENetDataType.UserState; head += sizeof(byte);
 
-        SerializationHelper.ToBytes(LeverPosition, data, ref head);
-        SerializationHelper.ToBytes(ref CannonPosition, data, ref head);
-        SerializationHelper.ToBytes(ref CannonRotation, data, ref head);
-        SerializationHelper.ToBytes(ref HeadPosition, data, ref head);
-        SerializationHelper.ToBytes(ref HeadRotation, data, ref head);
-        SerializationHelper.ToBytes(ref HandLeftPosition, data, ref head);
-        SerializationHelper.ToBytes(ref HandLeftRotation, data, ref head);
-        SerializationHelper.ToBytes(ref HandRightPosition, data, ref head);
-        SerializationHelper.ToBytes(ref HandRightRotation, data, ref head);
+        SerializationHelper.ToBytes(LeverPosition, Cache, ref head);
+        SerializationHelper.ToBytes(ref CannonPosition, Cache, ref head);
+        SerializationHelper.ToBytes(ref CannonRotation, Cache, ref head);
+        SerializationHelper.ToBytes(ref HeadPosition, Cache, ref head);
+        SerializationHelper.ToBytes(ref HeadRotation, Cache, ref head);
+        SerializationHelper.ToBytes(ref HandLeftPosition, Cache, ref head);
+        SerializationHelper.ToBytes(ref HandLeftRotation, Cache, ref head);
+        SerializationHelper.ToBytes(ref HandRightPosition, Cache, ref head);
+        SerializationHelper.ToBytes(ref HandRightRotation, Cache, ref head);
 
-        return data;
+        return Cache;
     }
 }

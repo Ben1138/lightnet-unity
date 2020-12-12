@@ -3,41 +3,48 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.PlayerLoop;
 
-public class SampleNetworkManager : MonoBehaviour
+public class ExampleNetworkManager : MonoBehaviour
 {
-    //assigns Server and Clients, contains the Network service
-    
-    private NetworkComponent net;
-
-    private ExperimentState lastState;
-    
+    private NetworkComponent Net;
+    private ExperimentState LastState;
     private byte MySlot= 0;
-
     private byte NextSlot = 0;    //Server only 
     
     public void StartClient()
     {
-        net.StartAsClient("127.0.0.1");
+        Net.StartAsClient("127.0.0.1");
         MySlot = 0;
     }
 
-    public void  StartServer()
+    public void StartServer()
     {
-        net.StartAsServer();
+        Net.StartAsServer();
         MySlot = NextSlot++;
     }
 
-    public void  Close()
+    public void Close()
     {
-        net.Close();
+        Net.Close();
     }
+
+    public ENetworkState GetState()
+    {
+        return Net.GetState();
+    }
+
+    public void BroadCastExperimentStatusUpdate(EExperimentStatus experimentStatus)
+    {
+        LastState.Status = experimentStatus;
+        Net.BroadcastNetworkData(LastState);
+    }
+
     // Start is called before the first frame update
     void Start()
     {
-        Debug.Assert(net!=null, "Please set a Network Component");
-        net.OnNetworkDataReceived += OnUserStateReceived;
-        net.OnClientDisconnected += OnClientDisconected;
-        net.OnClientConnected += OnClientConnected;
+        Debug.Assert(Net!=null, "Please set a Network Component");
+        Net.OnNetworkDataReceived += OnNetworkDataReceived;
+        Net.OnClientDisconnected += OnClientDisconected;
+        Net.OnClientConnected += OnClientConnected;
     }
 
     // Update is called once per frame
@@ -47,7 +54,7 @@ public class SampleNetworkManager : MonoBehaviour
 
         if (state==ENetworkState.Running)
         {
-            if (net.IsServer())
+            if (Net.IsServer())
             {
                 UpdateServer();
             }
@@ -56,60 +63,44 @@ public class SampleNetworkManager : MonoBehaviour
                 UpdateClient();
             }
         }
-        
-        
     }
 
-    private void UpdateClient()
+    void UpdateClient()
     {
         Debug.Assert(GetState()==ENetworkState.Running);
         if (MySlot == 0)//if you are Client your Slot number should be higher than 0
         {
-            return;    //as long as you dont have slot , dont do anything
+            return; //as long as you dont have slot , dont do anything
         } 
     }
 
-    private void UpdateServer()
+    void UpdateServer()
     {
         Debug.Assert(GetState()==ENetworkState.Running);
     }
     
-    public ENetworkState GetState()
-    {
-        return net.GetState();
-    }
-    
-    void OnUserStateReceived(object sender, ReceivedNetworkDataEventArgs e)
+    void OnNetworkDataReceived(object sender, ReceivedNetworkDataEventArgs e)
     {
         NetworkData data = e.State;
-
         if (e.Type == ENetDataType.ExperimentState)
         {
-            ExperimentState state =(ExperimentState) data;
+            ExperimentState state = (ExperimentState)data;
             MySlot = state.socketNumber;
         }
     }
     
     void OnClientConnected(object sender, ConnectionEventArgs e)         //if you are a server than, you handle clients
     {
-        if (net.IsServer())
+        if (Net.IsServer())
         {
             ExperimentState state = new ExperimentState();
             state.socketNumber = NextSlot++;
-            net.SendNetworkData(e.Handle,state);
+            Net.SendNetworkData(e.Handle,state);
         }
     }
-    
-     
     
     void OnClientDisconected(object sender, ConnectionEventArgs e)
     {
         ExperimentManager.Instance().ClientDisconected();
-    }
-
-    public void BroadCastExperimentStatusUpdate(ExperimentStatus experimentStatus)
-    {
-        lastState.experimentStatus = experimentStatus;
-        net.BroadcastNetworkData(lastState);
     }
 }
