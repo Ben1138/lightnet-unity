@@ -13,13 +13,15 @@ public class ConnectionEventArgs : EventArgs
     }
 }
 
-public class ReceivedUserStateEventArgs : EventArgs
+public class ReceivedNetworkDataEventArgs : EventArgs
 {
-    public UserState State;
+    public ENetDataType Type;
+    public NetworkData State;
 
-    public ReceivedUserStateEventArgs(UserState state)
+    public ReceivedNetworkDataEventArgs(NetworkData state, ENetDataType type)
     {
         State = state;
+        Type = type;
     }
 }
 
@@ -27,7 +29,7 @@ public class NetworkComponent : MonoBehaviour
 {
     public EventHandler<ConnectionEventArgs> OnClientConnected;
     public EventHandler<ConnectionEventArgs> OnClientDisconnected;
-    public EventHandler<ReceivedUserStateEventArgs> OnUserStateReceived;
+    public EventHandler<ReceivedNetworkDataEventArgs> OnNetworkDataReceived;
     NetworkService Net = new NetworkService();
 
 
@@ -46,6 +48,11 @@ public class NetworkComponent : MonoBehaviour
         return Net.IsServer();
     }
 
+    public ConnectionHandle[] GetConnections()
+    {
+        return Net.GetConnections();
+    }
+    
     public string[] GetConnectionNames()
     {
         ConnectionHandle[] conns = Net.GetConnections();
@@ -77,8 +84,8 @@ public class NetworkComponent : MonoBehaviour
     {
         return Net.Close();
     }
-
-    public void SendUserState(UserState userState)
+    
+    public void BroadcastNetworkData(NetworkData networkData)
     {
         if (Net.GetState() != ENetworkState.Running)
         {
@@ -86,7 +93,18 @@ public class NetworkComponent : MonoBehaviour
             return;
         }
 
-        Net.BroadcastMessage(ENetChannel.Unreliable, userState.Serialize());
+        Net.BroadcastMessage( ENetChannel.Unreliable, networkData.Serialize());
+    }
+
+    public void SendNetworkData(ConnectionHandle handle, NetworkData networkData)
+    {
+        if (Net.GetState() != ENetworkState.Running)
+        {
+            Debug.LogError("Do not try to send data if network is not running!");
+            return;
+        }
+
+        Net.SendMessage(handle, ENetChannel.Unreliable, networkData.Serialize());
     }
 
     void Update()
@@ -136,12 +154,23 @@ public class NetworkComponent : MonoBehaviour
 
             if (last != null && last.Length > 0)
             {
-                if ((ENetDataType)last[0] == ENetDataType.UserState)
+                NetworkData networkData = null;
+                switch ((ENetDataType) last[0])
                 {
-                    UserState userState = new UserState();
-                    userState.Deserialize(last);
-                    ReceivedUserStateEventArgs args = new ReceivedUserStateEventArgs(userState);
-                    OnUserStateReceived?.Invoke(this, args);
+                    case ENetDataType.UserState: 
+                        networkData= new UserState();
+                        break;
+                    case ENetDataType.ExperimentState:
+                        networkData =new  ExperimentState();
+                        break;
+                    default: Debug.LogError("Unknown NetDataType " + last[0]);
+                        break;
+                }
+                if(networkData!=null)
+                {
+                    networkData.Deserialize(last);
+                    ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(networkData,(ENetDataType)last[0]);
+                    OnNetworkDataReceived?.Invoke(this, args);
                 }
             }
         }
