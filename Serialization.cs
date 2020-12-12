@@ -58,7 +58,7 @@ public static class SerializationHelper
     }
 }
 
-
+//this needs to be adjusted for the programm
 public enum ENetDataType : byte
 {
     UserState = 1,
@@ -72,6 +72,44 @@ public interface NetworkData
     void Deserialize(byte[] data);
 }
 
+public enum ExperimentStatus
+{
+    Waiting, //Waiting for other participant
+    WarmUp, // Potential Countdown until something happens
+    Running, // Information is send and received , experiment runs
+    End // Participants might see and move, relevant things stop working, potential state switch
+}
+public class ExperimentState : NetworkData
+{
+    private const int SIZE =
+        sizeof(byte) + //socket Number 
+        sizeof(byte); //ExperimentState
+    public byte socketNumber;
+
+    public ExperimentStatus experimentStatus;
+        
+    public byte[] Serialize()
+    {
+        byte[] data = new byte[SIZE];
+
+        int offset = 0;
+        data[offset] = (byte)ENetDataType.ExperimentState; offset += sizeof(byte);
+        data[offset] = socketNumber;
+        offset += sizeof(byte);
+        data[offset] = (byte) experimentStatus;
+        return data;
+    }
+
+    public void Deserialize(byte[] data)
+    {
+        int offset = 0;
+        Debug.Assert(data[offset]== (byte) ENetDataType.ExperimentState);
+        offset += sizeof(byte);
+        socketNumber = data[offset];
+        offset += sizeof(byte);
+        experimentStatus = (ExperimentStatus) data[offset];
+    }
+}
 public class UserState : NetworkData
 {
     const int SIZE =
