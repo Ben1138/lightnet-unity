@@ -16,11 +16,11 @@ public class ConnectionEventArgs : EventArgs
 public class ReceivedNetworkDataEventArgs : EventArgs
 {
     public ENetDataType Type;
-    public NetworkData State;
+    public NetworkData Data;
 
-    public ReceivedNetworkDataEventArgs(NetworkData state, ENetDataType type)
+    public ReceivedNetworkDataEventArgs(NetworkData data, ENetDataType type)
     {
-        State = state;
+        Data = data;
         Type = type;
     }
 }
@@ -48,11 +48,29 @@ public class NetworkComponent : MonoBehaviour
         return Net.IsServer();
     }
 
+    /// <summary>
+    /// Get handles for all the currently established connections at this exact point in time.<br/>
+    /// For clients, there should always be 0 (disconnected) or 1 (connected) connections.<br/>
+    /// For servers, this can vary from 0 to maxClients.
+    /// </summary>
+    /// <returns>
+    /// A list of connection handles. A connection handle can be seen as a unique identifier of
+    /// a single connection.<br/>
+    /// A handle:<br/>
+    /// - is always unique<br/>
+    /// - will never be re-assigned<br/>
+    /// - can become invalid over time
+    /// </returns>
     public ConnectionHandle[] GetConnections()
     {
         return Net.GetConnections();
     }
-    
+
+    /// <summary>
+    /// Returns the 'names' of all established connections. This usually contains the remote address, 
+    /// the connected ports, and whether that connection is still alive or not.
+    /// </summary>
+    /// <returns>Connection names / information</returns>
     public string[] GetConnectionNames()
     {
         ConnectionHandle[] conns = Net.GetConnections();
@@ -64,12 +82,32 @@ public class NetworkComponent : MonoBehaviour
         return names;
     }
 
-    public bool StartAsServer()
+    /// <summary>
+    /// Start a server, listening to incoming clients
+    /// </summary>
+    /// <param name="portReliable">Port to build up the reliable (TCP) connection on</param>
+    /// <param name="portUnreliable">
+    /// Port to build the unreliable (UDP) connection on.<br/>
+    /// Beware that, with the current implementation, each new client will listen on a subsequent
+    /// port after the given one! So for example, for portUnreliable=69, the first client will listen
+    /// on UDP port 70, the next on 71 and so on...
+    /// </param>
+    /// <param name="maxClients">Maximum of connections to accept</param>
+    /// <returns>False, if already running or starting the server failed (port already in use?)</returns>
+    public bool StartServer(int portReliable, int portUnreliable, int maxClients)
     {
-        return Net.StartServer(42069, 42169, 10);
+        //return Net.StartServer(42069, 42169, 1);
+        return Net.StartServer(portReliable, portUnreliable, maxClients);
     }
 
-    public bool StartAsClient(string ip)
+    /// <summary>
+    /// Connect as a client to a already listening server
+    /// </summary>
+    /// <param name="address">The address to connect to</param>
+    /// <param name="portReliable">Port of the reliable (TCP) connection the server listens on</param>
+    /// <param name="portUnreliable">Port of the unreliable (UDP) connection the server listens on</param>
+    /// <returns>False, if already running</returns>
+    public bool StartClient(string ip, int portReliable, int portUnreliable)
     {
         IPAddress address;
         if (!IPAddress.TryParse(ip, out address))
@@ -77,15 +115,27 @@ public class NetworkComponent : MonoBehaviour
             Debug.LogError("Invalid IP-Address!");
             return false;
         }
-        return Net.StartClient(address, 42069, 42169);
+        return Net.StartClient(address, portReliable, portUnreliable);
     }
 
+    /// <summary>
+    /// Close all open connections and shut down all sockets.<br/>
+    /// This is for both roles, server and client.
+    /// </summary>
+    /// <returns>False, if we're already in the process of shutting down or already closed altogether.</returns>
     public bool Close()
     {
         return Net.Close();
     }
-    
-    public void BroadcastNetworkData(ENetChannel channel, NetworkData networkData)
+   
+    /// <summary>
+    /// Send a message through a specific connection / to a specific destination.
+    /// </summary>
+    /// <param name="connection">Destination of this message</param>
+    /// <param name="channel">Choose whether you want this message to be transmitted reliable or not</param>
+    /// <param name="message">The actual message</param>
+    /// <returns>False, if the given connection handle is (no longer) valid.</returns>
+    public void SendNetworkData(ConnectionHandle connection, ENetChannel channel, NetworkData message)
     {
         if (Net.GetState() != ENetworkState.Running)
         {
@@ -93,10 +143,15 @@ public class NetworkComponent : MonoBehaviour
             return;
         }
 
-        Net.BroadcastMessage(channel, networkData.Serialize());
+        Net.SendMessage(connection, channel, message.Serialize());
     }
 
-    public void SendNetworkData(ENetChannel channel, ConnectionHandle handle, NetworkData networkData)
+    /// <summary>
+    /// Send a message to everyone listening.
+    /// </summary>
+    /// <param name="channel">Choose whether you want this message to be transmitted reliable or not</param>
+    /// <param name="message">The actual message you want to spread</param>
+    public void BroadcastNetworkData(ENetChannel channel, NetworkData message)
     {
         if (Net.GetState() != ENetworkState.Running)
         {
@@ -104,7 +159,7 @@ public class NetworkComponent : MonoBehaviour
             return;
         }
 
-        Net.SendMessage(handle, channel, networkData.Serialize());
+        Net.BroadcastMessage(channel, message.Serialize());
     }
 
     void Update()
@@ -141,37 +196,28 @@ public class NetworkComponent : MonoBehaviour
 
         if (Net.GetState() == ENetworkState.Running)
         {
-            byte[] last = null;
-
-            // we're only interested in the most recent one
             while (Net.GetNextMessage(out byte[] message, out ConnectionHandle connection, out ENetChannel channel)) 
             {
-                if (channel == ENetChannel.Unreliable)
-                {
-                    last = message;
-                }
-            }
-
-            if (last != null && last.Length > 0)
-            {
                 NetworkData networkData = null;
-                switch ((ENetDataType) last[0])
+                ENetDataType type = (ENetDataType)message[0];
+                switch (type)
                 {
-                    case ENetDataType.UserState: 
-                        networkData= new UserState();
+                    case ENetDataType.UserState:
+                        networkData = new UserState();
                         break;
                     case ENetDataType.ExperimentState:
-                        networkData =new  ExperimentState();
+                        networkData = new ExperimentState();
                         break;
-                    default: Debug.LogError("Unknown NetDataType " + last[0]);
+                    default:
+                        Debug.LogError("Unknown NetDataType " + (int)type);
                         break;
                 }
-                if(networkData!=null)
+                if (networkData != null)
                 {
-                    networkData.Deserialize(last);
-                    ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(networkData,(ENetDataType)last[0]);
+                    networkData.Deserialize(message);
+                    ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(networkData, type);
                     OnNetworkDataReceived?.Invoke(this, args);
-                    Debug.LogFormat("Received Network data of type '{0}'", ((ENetDataType)last[0]).ToString(), networkData);
+                    //Debug.LogFormat("Received Network data of type '{0}'", type.ToString(), networkData);
                 }
             }
         }
