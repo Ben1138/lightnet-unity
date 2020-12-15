@@ -4,8 +4,6 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using UnityEngine;
-
 
 public enum ENetChannel
 {
@@ -71,6 +69,15 @@ public struct ConnectionEvent
 
 public class NetworkService
 {
+    // ASSERT and CLAMP are the only platform specific dependencies. 
+    // Route them to somewhere else to make this library completely platform independent!
+    static void ASSERT(bool condition) { UnityEngine.Debug.Assert(condition); }
+
+    // This is stupid... the .NET runtime of Unity doesn't implement System.Math.Clamp, so we have
+    // to re-route to Unitys Math library instead. When using on a different platform, re-route appropriately
+    static int CLAMP(int value, int min, int max) { return UnityEngine.Mathf.Clamp(value, min, max); }
+
+
     // This should be enough for most cases. 
     // Increase in case of 'Ran out of receive buffer memory!' error.
     const int CHANNEL_BUFFER_SIZE = 2048;
@@ -154,9 +161,9 @@ public class NetworkService
             return false;
         }
 
-        Debug.Assert(Server == null);
-        Debug.Assert(UnreliableReceive == null);
-        Debug.Assert(Connections.Count == 0);
+        ASSERT(Server == null);
+        ASSERT(UnreliableReceive == null);
+        ASSERT(Connections.Count == 0);
 
         PortReliable = portReliable;
         PortUnreliable = portUnreliable;
@@ -202,9 +209,9 @@ public class NetworkService
             return false;
         }
 
-        Debug.Assert(Server == null);
-        Debug.Assert(UnreliableReceive == null);
-        Debug.Assert(Connections.Count == 0);
+        ASSERT(Server == null);
+        ASSERT(UnreliableReceive == null);
+        ASSERT(Connections.Count == 0);
 
         State = ENetworkState.Startup;
         RemoteAddress = address;
@@ -248,9 +255,9 @@ public class NetworkService
             return false;
         }
 
-        Debug.Assert(!bShutdown);
-        Debug.Assert(NetThread != null);
-        Debug.Assert(NetThread.IsAlive);
+        ASSERT(!bShutdown);
+        ASSERT(NetThread != null);
+        ASSERT(NetThread.IsAlive);
 
         State = ENetworkState.Shutdown;
         foreach (KeyValuePair<ulong, Connection> conn in Connections)
@@ -301,8 +308,8 @@ public class NetworkService
     /// </param>
     public void SetNetworkErrorEmulation(int looseLevel, int maxSendDelay)
     {
-        NetworkErrorEmulationLevel = Mathf.Clamp(looseLevel, 0, 100);
-        NetworkErrorEmulationDelay = Mathf.Min(maxSendDelay, 0);
+        NetworkErrorEmulationLevel = CLAMP(looseLevel, 0, 100);
+        NetworkErrorEmulationDelay = Math.Min(maxSendDelay, 0);
     }
 
     /// <summary>
@@ -535,9 +542,9 @@ public class NetworkService
 
     void ServerThreadFunc()
     {
-        Debug.Assert(Server != null);
-        Debug.Assert(State == ENetworkState.Running);
-        Debug.Assert(Connections.Count == 0);
+        ASSERT(Server != null);
+        ASSERT(State == ENetworkState.Running);
+        ASSERT(Connections.Count == 0);
 
         while (!bShutdown)
         {
@@ -558,7 +565,7 @@ public class NetworkService
                     continue;
                 }
 
-                Debug.Assert(client != null);
+                ASSERT(client != null);
                 IPAddress address = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
 
                 // TODO: implement proper port assignment
@@ -610,10 +617,10 @@ public class NetworkService
     {
         const ulong handle = 1;
 
-        Debug.Assert(Server == null);
-        Debug.Assert(UnreliableReceive == null);
-        Debug.Assert(State == ENetworkState.Startup);
-        Debug.Assert(Connections.Count == 0);
+        ASSERT(Server == null);
+        ASSERT(UnreliableReceive == null);
+        ASSERT(State == ENetworkState.Startup);
+        ASSERT(Connections.Count == 0);
 
         TcpClient client = null;
         try
@@ -638,7 +645,7 @@ public class NetworkService
 
         Connections.TryAdd(handle, new Connection(this, handle, RemoteAddress, PortReliable, PortUnreliable, client));
 
-        Debug.Assert(Connections.Count == 1);
+        ASSERT(Connections.Count == 1);
         State = ENetworkState.Running;
 
         while (!bShutdown)
@@ -691,8 +698,8 @@ public class NetworkService
             }
 
             Connection connection = null;
-            Debug.Assert(data != null);
-            Debug.Assert(sender != null);
+            ASSERT(data != null);
+            ASSERT(sender != null);
 
             //LogQueue.LogInfo("Received UDP package: {0}", new object[] { data.Length });
 
@@ -710,7 +717,7 @@ public class NetworkService
                 // and it's handle is always 1
                 connection = Connections[1];
             }
-            Debug.Assert(connection != null);
+            ASSERT(connection != null);
 
             lock (connection.GetUnreliableReceiveLock())
             {
@@ -778,9 +785,9 @@ public class NetworkService
 
         public Connection(NetworkService owner, ulong handle, IPAddress address, int portReliable, int portUnreliable, TcpClient client)
         {
-            Debug.Assert(owner != null);
-            Debug.Assert(handle != 0);
-            Debug.Assert(client != null);
+            ASSERT(owner != null);
+            ASSERT(handle != 0);
+            ASSERT(client != null);
 
             Owner = owner;
             Handle = handle;
@@ -1018,9 +1025,9 @@ public class NetworkService
 
         void ConnectionThreadFunc()
         {
-            Debug.Assert(UnrealiableSend == null);
-            Debug.Assert(ReliableReceiveBuffer.Head == 0);
-            Debug.Assert(UnreliableReceiveBuffer.Head == 0);
+            ASSERT(UnrealiableSend == null);
+            ASSERT(ReliableReceiveBuffer.Head == 0);
+            ASSERT(UnreliableReceiveBuffer.Head == 0);
 
             UnrealiableSend = new UdpClient();
             UnrealiableSend.Connect(RemoteUnreliable);
@@ -1117,11 +1124,11 @@ public class NetworkService
                                     if (ReliableReceiveBuffer.Head >= sizeof(byte) + sizeof(int) + sizeof(ulong))
                                     {
                                         // This message type should only be received as client!
-                                        Debug.Assert(Owner.Server == null);
+                                        ASSERT(Owner.Server == null);
 
                                         int localUnreliablePort = BitConverter.ToInt32(ReliableReceiveBuffer.Buffer, offset); offset += sizeof(int);
                                         RemoteHandle = BitConverter.ToUInt64(ReliableReceiveBuffer.Buffer, offset);
-                                        Debug.Assert(RemoteHandle != 0);
+                                        ASSERT(RemoteHandle != 0);
                                         Owner.UnreliableReceive = new UdpClient(localUnreliablePort);
 
                                         LogQueue.LogInfo("Received ClientInfo from'{0}'", new object[] { RemoteReliable.Address.ToString() });
