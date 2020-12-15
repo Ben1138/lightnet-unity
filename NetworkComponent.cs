@@ -171,6 +171,7 @@ public class NetworkComponent : MonoBehaviour
                     networkData.Deserialize(last);
                     ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(networkData,(ENetDataType)last[0]);
                     OnNetworkDataReceived?.Invoke(this, args);
+                    Debug.LogFormat("Received Network data of type '{0}'", ((ENetDataType)last[0]).ToString(), networkData);
                 }
             }
         }
