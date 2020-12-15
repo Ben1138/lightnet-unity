@@ -85,7 +85,7 @@ public class NetworkComponent : MonoBehaviour
         return Net.Close();
     }
     
-    public void BroadcastNetworkData(NetworkData networkData)
+    public void BroadcastNetworkData(ENetChannel channel, NetworkData networkData)
     {
         if (Net.GetState() != ENetworkState.Running)
         {
@@ -93,10 +93,10 @@ public class NetworkComponent : MonoBehaviour
             return;
         }
 
-        Net.BroadcastMessage( ENetChannel.Unreliable, networkData.Serialize());
+        Net.BroadcastMessage(channel, networkData.Serialize());
     }
 
-    public void SendNetworkData(ConnectionHandle handle, NetworkData networkData)
+    public void SendNetworkData(ENetChannel channel, ConnectionHandle handle, NetworkData networkData)
     {
         if (Net.GetState() != ENetworkState.Running)
         {
@@ -104,7 +104,7 @@ public class NetworkComponent : MonoBehaviour
             return;
         }
 
-        Net.SendMessage(handle, ENetChannel.Unreliable, networkData.Serialize());
+        Net.SendMessage(handle, channel, networkData.Serialize());
     }
 
     void Update()
