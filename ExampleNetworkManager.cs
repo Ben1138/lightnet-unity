@@ -35,7 +35,7 @@ public class ExampleNetworkManager : MonoBehaviour
     public void BroadCastExperimentStatusUpdate(EExperimentStatus experimentStatus)
     {
         LastState.Status = experimentStatus;
-        Net.BroadcastNetworkData(LastState);
+        Net.BroadcastNetworkData(ENetChannel.Reliable, LastState);
     }
 
     // Start is called before the first frame update
@@ -95,7 +95,7 @@ public class ExampleNetworkManager : MonoBehaviour
         {
             ExperimentState state = new ExperimentState();
             state.socketNumber = NextSlot++;
-            Net.SendNetworkData(e.Handle,state);
+            Net.SendNetworkData(ENetChannel.Reliable, e.Handle,state);
         }
     }
     
