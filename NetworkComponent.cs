@@ -15,11 +15,13 @@ public class ConnectionEventArgs : EventArgs
 
 public class ReceivedNetworkDataEventArgs : EventArgs
 {
+    public ConnectionHandle Connection;
     public ENetDataType Type;
     public NetworkData Data;
 
-    public ReceivedNetworkDataEventArgs(NetworkData data, ENetDataType type)
+    public ReceivedNetworkDataEventArgs(ConnectionHandle connection, NetworkData data, ENetDataType type)
     {
+        Connection = connection;
         Data = data;
         Type = type;
     }
@@ -27,9 +29,27 @@ public class ReceivedNetworkDataEventArgs : EventArgs
 
 public class NetworkComponent : MonoBehaviour
 {
+    /// <summary>
+    /// Will fire in both roles, server and client.<br/>
+    /// Server: Fire each time a new client connected.<br/>
+    /// Client: Fire when connecting to the Server was successfull.<br/>
+    /// </summary>
     public EventHandler<ConnectionEventArgs> OnClientConnected;
+
+    /// <summary>
+    /// Will fire in both roles, server and client.<br/>
+    /// Server: Fire each time a client disconnected, either intentional or due to connection loss.<br/>
+    /// Client: Fire when disconnecting from the server, either intentional or due to connection loss.<br/>
+    /// </summary>
     public EventHandler<ConnectionEventArgs> OnClientDisconnected;
+
+    /// <summary>
+    /// Server: Will fire for each incoming message from any client.<br/>
+    /// Client: Will fire for each incoming message from the server.<br/>
+    /// You can differentiate by whom this message was sent by looking at the <see cref="ReceivedNetworkDataEventArgs.Connection"/> property.
+    /// </summary>
     public EventHandler<ReceivedNetworkDataEventArgs> OnNetworkDataReceived;
+
     NetworkService Net = new NetworkService();
 
 
@@ -215,7 +235,7 @@ public class NetworkComponent : MonoBehaviour
                 if (networkData != null)
                 {
                     networkData.Deserialize(message);
-                    ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(networkData, type);
+                    ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(connection, networkData, type);
                     OnNetworkDataReceived?.Invoke(this, args);
                     //Debug.LogFormat("Received Network data of type '{0}'", type.ToString(), networkData);
                 }
