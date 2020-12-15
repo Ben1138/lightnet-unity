@@ -77,7 +77,6 @@ public enum EExperimentStatus
     Waiting,  // Waiting for other participant
     WarmUp,   // Potential Countdown until something happens
     Running,  // Information is send and received , experiment runs
-    End       // Participants might see and move, relevant things stop working, potential state switch
 }
 
 public class ExperimentState : NetworkData
