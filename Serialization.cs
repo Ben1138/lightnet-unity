@@ -58,7 +58,7 @@ public static class SerializationHelper
     }
 }
 
-//this needs to be adjusted for the programm
+// This needs to be adjusted / extended to your needs
 public enum ENetDataType : byte
 {
     UserState = 1,
@@ -85,7 +85,7 @@ public class ExperimentState : NetworkData
         sizeof(byte) +  // ENetDataType.ExperimentState
         sizeof(byte) +  // socket Number 
         sizeof(byte);   // ExperimentState
-    public byte socketNumber;
+    public byte SocketNumber;
 
     public EExperimentStatus Status;
     byte[] Cache = new byte[SIZE];
@@ -93,9 +93,8 @@ public class ExperimentState : NetworkData
     public byte[] Serialize()
     {
         int offset = 0;
-        Cache[offset] = (byte)ENetDataType.ExperimentState; offset += sizeof(byte);
-        Cache[offset] = socketNumber;
-        offset += sizeof(byte);
+        Cache[offset] = (byte)ENetDataType.ExperimentState;     offset += sizeof(byte);
+        Cache[offset] = SocketNumber;                           offset += sizeof(byte);
         Cache[offset] = (byte) Status;
         return Cache;
     }
@@ -103,10 +102,8 @@ public class ExperimentState : NetworkData
     public void Deserialize(byte[] data)
     {
         int offset = 0;
-        Debug.Assert(data[offset]== (byte) ENetDataType.ExperimentState);
-        offset += sizeof(byte);
-        socketNumber = data[offset];
-        offset += sizeof(byte);
+        Debug.Assert(data[offset]== (byte) ENetDataType.ExperimentState);   offset += sizeof(byte);
+        SocketNumber = data[offset];                                        offset += sizeof(byte);
         Status = (EExperimentStatus) data[offset];
     }
 }
@@ -166,13 +163,13 @@ public class UserState : NetworkData
         int head = 0;
         Cache[head] = (byte)ENetDataType.UserState; head += sizeof(byte);
 
-        SerializationHelper.ToBytes(LeverPosition, Cache, ref head);
-        SerializationHelper.ToBytes(ref CannonPosition, Cache, ref head);
-        SerializationHelper.ToBytes(ref CannonRotation, Cache, ref head);
-        SerializationHelper.ToBytes(ref HeadPosition, Cache, ref head);
-        SerializationHelper.ToBytes(ref HeadRotation, Cache, ref head);
-        SerializationHelper.ToBytes(ref HandLeftPosition, Cache, ref head);
-        SerializationHelper.ToBytes(ref HandLeftRotation, Cache, ref head);
+        SerializationHelper.ToBytes(LeverPosition,         Cache, ref head);
+        SerializationHelper.ToBytes(ref CannonPosition,    Cache, ref head);
+        SerializationHelper.ToBytes(ref CannonRotation,    Cache, ref head);
+        SerializationHelper.ToBytes(ref HeadPosition,      Cache, ref head);
+        SerializationHelper.ToBytes(ref HeadRotation,      Cache, ref head);
+        SerializationHelper.ToBytes(ref HandLeftPosition,  Cache, ref head);
+        SerializationHelper.ToBytes(ref HandLeftRotation,  Cache, ref head);
         SerializationHelper.ToBytes(ref HandRightPosition, Cache, ref head);
         SerializationHelper.ToBytes(ref HandRightRotation, Cache, ref head);
 

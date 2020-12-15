@@ -46,4 +46,14 @@ public class ConcurrentSortedList<TKey, TValue> where TKey : struct where TValue
             List.Clear();
         }
     }
+
+    public int GetCount()
+    {
+        int count;
+        lock (Lock)
+        {
+            count = List.Count;
+        }
+        return count;
+    }
 }

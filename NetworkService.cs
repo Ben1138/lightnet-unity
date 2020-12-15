@@ -9,7 +9,13 @@ using UnityEngine;
 
 public enum ENetChannel
 {
+    // Messages of this kind will always reach their destination
+    // (given the connection is not lost) in the exact same order
+    // they were send in.
     Reliable,
+
+    // Messages of this kind might or might not reach their destination,
+    // but for the ones arriving their order is still assured.
     Unreliable
 }
 
@@ -78,6 +84,11 @@ public class NetworkService
     // Seconds. Timeout when to deem a connection as lost after not receiving any ping
     const double PING_TIMEOUT = 5.0;
 
+    // If any internal queue (receive queues, event queue) exceeds this size,
+    // a warning will be issued. When this happens it probably is due to the
+    // application not polling any network data / events
+    const int QUEUE_WARN_THRESHOLD = 1000;
+
 
     // Internal header for all reliable packages
     enum EMessageType : byte
@@ -90,6 +101,9 @@ public class NetworkService
     }
 
 
+    /// <summary>
+    /// Specify what kind of events should be pushed into the event queue by setting the appropriate flag(s)
+    /// </summary>
     public volatile ENetworkEventReportFlags EventFlags = ENetworkEventReportFlags.ConnectionStatus;
 
     volatile ENetworkState State = ENetworkState.Closed;
@@ -120,6 +134,18 @@ public class NetworkService
         }
     }
 
+    /// <summary>
+    /// Start a server, listening to incoming clients
+    /// </summary>
+    /// <param name="portReliable">Port to build up the reliable (TCP) connection on</param>
+    /// <param name="portUnreliable">
+    /// Port to build the unreliable (UDP) connection on.<br/>
+    /// Beware that, with the current implementation, each new client will listen on a subsequent
+    /// port after the given one! So for example, for portUnreliable=69, the first client will listen
+    /// on UDP port 70, the next on 71 and so on...
+    /// </param>
+    /// <param name="maxClients">Maximum of connections to accept</param>
+    /// <returns>False, if already running or starting the server failed (port already in use?)</returns>
     public bool StartServer(int portReliable, int portUnreliable, int maxClients)
     {
         if (State != ENetworkState.Closed)
@@ -161,6 +187,13 @@ public class NetworkService
         return true;
     }
 
+    /// <summary>
+    /// Connect as a client to a already listening server
+    /// </summary>
+    /// <param name="address">The address to connect to</param>
+    /// <param name="portReliable">Port of the reliable (TCP) connection the server listens on</param>
+    /// <param name="portUnreliable">Port of the unreliable (UDP) connection the server listens on</param>
+    /// <returns>False, if already running</returns>
     public bool StartClient(IPAddress address, int portReliable, int portUnreliable)
     {
         if (State != ENetworkState.Closed)
@@ -197,6 +230,11 @@ public class NetworkService
         return Server != null;
     }
 
+    /// <summary>
+    /// Close all open connections and shut down all sockets.<br/>
+    /// This is for both roles, server and client.
+    /// </summary>
+    /// <returns>False, if we're already in the process of shutting down or already closed altogether.</returns>
     public bool Close()
     {
         if (State == ENetworkState.Closed)
@@ -267,6 +305,19 @@ public class NetworkService
         NetworkErrorEmulationDelay = Mathf.Min(maxSendDelay, 0);
     }
 
+    /// <summary>
+    /// Get handles for all the currently established connections at this exact point in time.<br/>
+    /// For clients, there should always be 0 (disconnected) or 1 (connected) connections.<br/>
+    /// For servers, this can vary from 0 to maxClients.
+    /// </summary>
+    /// <returns>
+    /// A list of connection handles. A connection handle can be seen as a unique identifier of
+    /// a single connection.<br/>
+    /// A handle:<br/>
+    /// - is always unique<br/>
+    /// - will never be re-assigned<br/>
+    /// - can become invalid over time
+    /// </returns>
     public ConnectionHandle[] GetConnections()
     {
         ConnectionHandle[] conns = new ConnectionHandle[Connections.Count];
@@ -278,6 +329,12 @@ public class NetworkService
         return conns;
     }
 
+    /// <summary>
+    /// Returns the 'name' of a given connection. This usually contains the remote address, 
+    /// the connected ports, and whether that connection is still alive or not.
+    /// </summary>
+    /// <param name="handle">Connection you want to retrieve the name / information from</param>
+    /// <returns>"INVALID HANDLE" if the given connection handle is invalid</returns>
     public string GetConnectionName(ConnectionHandle handle)
     {
         if (!handle.IsValid() || !Connections.ContainsKey(handle.GetInternalHandle()))
@@ -288,16 +345,35 @@ public class NetworkService
         return Connections[handle.GetInternalHandle()].ToString();
     }
 
+    /// <summary>
+    /// Here you can check whether a connection handle, you polled at some point in the past using <see cref="GetConnections"/>,
+    /// still points to a valid and existing connection.
+    /// </summary>
+    /// <param name="handle"></param>
+    /// <returns></returns>
     public bool IsConnected(ConnectionHandle handle)
     {
         return handle.IsValid() && Connections.ContainsKey(handle.GetInternalHandle()) && Connections[handle.GetInternalHandle()].IsAlive();
     }
 
+    /// <summary>
+    /// There will be "connected", "disconnected" and "package received" events which you can poll here.
+    /// You can determine what kind of events should be tracked by setting the <see cref="EventFlags"/> appropriately.
+    /// </summary>
+    /// <param name="outEvent"></param>
+    /// <returns></returns>
     public bool GetNextEvent(out ConnectionEvent outEvent)
     {
         return Events.TryDequeue(out outEvent);
     }
 
+    /// <summary>
+    /// Send a message through a specific connection / to a specific destination.
+    /// </summary>
+    /// <param name="connection">Destination of this message</param>
+    /// <param name="channel">Choose whether you want this message to be transmitted reliable or not</param>
+    /// <param name="message">The actual message</param>
+    /// <returns>False, if the given connection handle is (no longer) valid.</returns>
     public bool SendMessage(ConnectionHandle connection, ENetChannel channel, byte[] message)
     {
         if (!Connections.TryGetValue(connection.GetInternalHandle(), out Connection conn))
@@ -310,6 +386,11 @@ public class NetworkService
         return true;
     }
 
+    /// <summary>
+    /// Send a message to everyone listening.
+    /// </summary>
+    /// <param name="channel">Choose whether you want this message to be transmitted reliable or not</param>
+    /// <param name="message">The actual message you want to spread</param>
     public void BroadcastMessage(ENetChannel channel, byte[] message)
     {
         foreach (KeyValuePair<ulong, Connection> conn in Connections)
@@ -445,9 +526,9 @@ public class NetworkService
         if ((EventFlags & flag) != 0)
         {
             Events.Enqueue(ev);
-            if (Events.Count > 1000)
+            if (Events.Count > QUEUE_WARN_THRESHOLD)
             {
-                LogQueue.LogWarning("NetworkServeice event queue has over {0} events queued! Do you poll them somewhere?");
+                LogQueue.LogWarning("NetworkService event queue has over {0} events queued! Do you poll them somewhere?");
             }
         }
     }
@@ -1063,6 +1144,11 @@ public class NetworkService
                                         Array.Copy(ReliableReceiveBuffer.Buffer, offset, message, 0, msgSize);
 
                                         ReceivedReliableMessages.Enqueue(message);
+                                        if (ReceivedReliableMessages.Count >= QUEUE_WARN_THRESHOLD)
+                                        {
+                                            LogQueue.LogWarning("The network data queue for reliable messages has over {0} messages queued! Do you poll them somewhere?");
+                                        }
+
                                         if ((Owner.EventFlags & ENetworkEventReportFlags.ReceivedMessage) != 0)
                                         {
                                             Owner.AddEvent(new ConnectionEvent
@@ -1152,6 +1238,10 @@ public class NetworkService
                                 byte[] message = new byte[msgSize];
                                 Array.Copy(UnreliableReceiveBuffer.Buffer, offset, message, 0, msgSize);
                                 ReceivedUnreliableMessages.Enqueue(timestamp, message);
+                                if (ReceivedUnreliableMessages.GetCount() >= QUEUE_WARN_THRESHOLD)
+                                {
+                                    LogQueue.LogWarning("The network data queue for unreliable messages has over {0} messages queued! Do you poll them somewhere?");
+                                }
 
                                 if ((Owner.EventFlags & ENetworkEventReportFlags.ReceivedMessage) != 0)
                                 {

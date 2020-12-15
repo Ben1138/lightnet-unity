@@ -5,46 +5,83 @@ using UnityEngine.PlayerLoop;
 
 public class ExampleNetworkManager : MonoBehaviour
 {
-    private NetworkComponent Net;
-    private ExperimentState LastState;
+    [Header("Network Settings")]
+    public int PortReliable = 42069;
+    public int PortUnreliable = 42169;
+    public int MaxClients = 1;
+
+    [Header("Required References")]
+    public NetworkComponent NetComp;
+
+    private ExperimentState LastState = new ExperimentState();
+    private UserState SendingUserState = new UserState();
+
+
+    // use this to distinguish between multiplen etwork agents
+    // slot '0' is ALWAYS the server
+    // the first client will get slot '1', the next slot '2', and so on
     private byte MySlot= 0;
-    private byte NextSlot = 0;    //Server only 
-    
-    public void StartClient()
+
+    // server only variable. used to assign slots to incoming clients
+    private byte NextSlot = 0;
+
+
+    public bool StartServer()
     {
-        Net.StartAsClient("127.0.0.1");
-        MySlot = 0;
+        return NetComp.StartServer(PortReliable, PortUnreliable, MaxClients);
     }
 
-    public void StartServer()
+    public bool StartClient(string address)
     {
-        Net.StartAsServer();
-        MySlot = NextSlot++;
+        return NetComp.StartClient(address, PortReliable, PortUnreliable);
     }
 
-    public void Close()
+    public bool Close()
     {
-        Net.Close();
+        return NetComp.Close();
     }
 
     public ENetworkState GetState()
     {
-        return Net.GetState();
+        return NetComp.GetState();
     }
 
-    public void BroadCastExperimentStatusUpdate(EExperimentStatus experimentStatus)
+    public int GetNumConnections()
     {
-        LastState.Status = experimentStatus;
-        Net.BroadcastNetworkData(ENetChannel.Reliable, LastState);
+        return NetComp.GetConnections().Length;
     }
+
+    public bool IsServer()
+    {
+        return NetComp.IsServer();
+    }
+
+    public void BroadCastExperimentStatusUpdate(EExperimentStatus status)
+    {
+        Debug.LogFormat("Broadcasting experiment status update: {0}", status.ToString());
+        NetComp.BroadcastNetworkData(ENetChannel.Reliable, new ExperimentState { Status = status });
+    }
+
+    public void BroadcastVRAvatarUpdate(Transform VRHead, Transform VRHandLeft, Transform VRHandRight)
+    {
+        //Debug.Log("Broadcasting VR avatar update");
+        SendingUserState.HeadPosition = VRHead.position;
+        SendingUserState.HeadRotation = VRHead.rotation;
+        SendingUserState.HandLeftPosition = VRHandLeft.position;
+        SendingUserState.HandLeftRotation = VRHandLeft.rotation;
+        SendingUserState.HandRightPosition = VRHandRight.position;
+        SendingUserState.HandRightRotation = VRHandRight.rotation;
+        NetComp.BroadcastNetworkData(ENetChannel.Unreliable, SendingUserState);
+    }
+
 
     // Start is called before the first frame update
     void Start()
     {
-        Debug.Assert(Net!=null, "Please set a Network Component");
-        Net.OnNetworkDataReceived += OnNetworkDataReceived;
-        Net.OnClientDisconnected += OnClientDisconected;
-        Net.OnClientConnected += OnClientConnected;
+        Debug.Assert(NetComp!=null, "Please set a reference to a Network Component");
+        NetComp.OnNetworkDataReceived += OnNetworkDataReceived;
+        NetComp.OnClientDisconnected += OnClientDisconected;
+        NetComp.OnClientConnected += OnClientConnected;
     }
 
     // Update is called once per frame
@@ -54,7 +91,7 @@ public class ExampleNetworkManager : MonoBehaviour
 
         if (state==ENetworkState.Running)
         {
-            if (Net.IsServer())
+            if (NetComp.IsServer())
             {
                 UpdateServer();
             }
@@ -68,34 +105,41 @@ public class ExampleNetworkManager : MonoBehaviour
     void UpdateClient()
     {
         Debug.Assert(GetState()==ENetworkState.Running);
-        if (MySlot == 0)//if you are Client your Slot number should be higher than 0
+
+        //if you are Client your Slot number should be higher than 0
+        if (MySlot == 0)
         {
-            return; //as long as you dont have slot , dont do anything
+            //as long as you dont have slot , dont do anything
+            return;
         } 
+
+        // TODO: put your client code here
     }
 
     void UpdateServer()
     {
         Debug.Assert(GetState()==ENetworkState.Running);
+
+        // TODO: put your server code here
     }
     
     void OnNetworkDataReceived(object sender, ReceivedNetworkDataEventArgs e)
     {
-        NetworkData data = e.State;
+        NetworkData data = e.Data;
         if (e.Type == ENetDataType.ExperimentState)
         {
             ExperimentState state = (ExperimentState)data;
-            MySlot = state.socketNumber;
+            MySlot = state.SocketNumber;
         }
     }
     
-    void OnClientConnected(object sender, ConnectionEventArgs e)         //if you are a server than, you handle clients
+    void OnClientConnected(object sender, ConnectionEventArgs e)
     {
-        if (Net.IsServer())
+        if (NetComp.IsServer())
         {
             ExperimentState state = new ExperimentState();
-            state.socketNumber = NextSlot++;
-            Net.SendNetworkData(ENetChannel.Reliable, e.Handle,state);
+            state.SocketNumber = NextSlot++;
+            NetComp.SendNetworkData(e.Handle, ENetChannel.Reliable, state);
         }
     }
     
