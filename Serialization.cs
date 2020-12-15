@@ -83,8 +83,9 @@ public enum EExperimentStatus
 public class ExperimentState : NetworkData
 {
     private const int SIZE =
-        sizeof(byte) + //socket Number 
-        sizeof(byte); //ExperimentState
+        sizeof(byte) +  // ENetDataType.ExperimentState
+        sizeof(byte) +  // socket Number 
+        sizeof(byte);   // ExperimentState
     public byte socketNumber;
 
     public EExperimentStatus Status;
