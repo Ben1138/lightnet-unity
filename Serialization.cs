@@ -115,7 +115,8 @@ public class UserState : NetworkData
         // so we need to always use sizeof(float) instead
 
         sizeof(byte) +          // header     (ENetDataType.UserState)
-        sizeof(float) +         // float      CannonStrength
+        sizeof(float) +         // float      CannonRotation
+        sizeof(float) +         // float      CannonVelocity
         sizeof(float) +         // TargetPosition in Percentage
         sizeof(float) +         // Input given, just triggers method in server           
         sizeof(float) * 3 +     // Vector3    HeadPosition;
@@ -126,7 +127,8 @@ public class UserState : NetworkData
         sizeof(float) * 4;      // Quaternion HandRightRotation;
 
 
-    public float        CannonStrength;
+    public float        CannonRotation;
+    public float        CannonVelocity;
     public float        TargetPosition;
     public float        InputGiven;
     public Vector3      HeadPosition;
@@ -145,7 +147,8 @@ public class UserState : NetworkData
         Debug.Assert(data.Length >= SIZE);
         Debug.Assert((ENetDataType)data[head] == ENetDataType.UserState);
         head += sizeof(byte);
-        CannonStrength = SerializationHelper.FromBytes(data, ref head);
+        CannonRotation = SerializationHelper.FromBytes(data, ref head);
+        CannonVelocity = SerializationHelper.FromBytes(data, ref head);
         TargetPosition = SerializationHelper.FromBytes(data, ref head);
         InputGiven = SerializationHelper.FromBytes(data, ref head);
         SerializationHelper.FromBytes(data, ref head, ref HeadPosition);
@@ -161,10 +164,10 @@ public class UserState : NetworkData
         int head = 0;
         Cache[head] = (byte)ENetDataType.UserState; head += sizeof(byte);
 
-        
-        SerializationHelper.ToBytes(CannonStrength,    Cache, ref head);
-        SerializationHelper.ToBytes(TargetPosition, Cache, ref head);
-        SerializationHelper.ToBytes(InputGiven,         Cache, ref head);
+        SerializationHelper.ToBytes(CannonRotation,        Cache, ref head);
+        SerializationHelper.ToBytes(CannonVelocity,      Cache, ref head);
+        SerializationHelper.ToBytes(TargetPosition,        Cache, ref head);
+        SerializationHelper.ToBytes(InputGiven,            Cache, ref head);
         SerializationHelper.ToBytes(ref HeadPosition,      Cache, ref head);
         SerializationHelper.ToBytes(ref HeadRotation,      Cache, ref head);
         SerializationHelper.ToBytes(ref HandLeftPosition,  Cache, ref head);
