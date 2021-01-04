@@ -145,6 +145,6 @@ public class ExampleNetworkManager : MonoBehaviour
     
     void OnClientDisconected(object sender, ConnectionEventArgs e)
     {
-        ExperimentManager.Instance().ClientDisconected();
+        
     }
 }
