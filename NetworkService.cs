@@ -648,6 +648,12 @@ public class NetworkService
         ASSERT(Connections.Count == 1);
         State = ENetworkState.Running;
 
+        AddEvent(new ConnectionEvent
+        {
+            Connection = new ConnectionHandle(handle),
+            EventType = ConnectionEvent.EType.Connected
+        }, ENetworkEventReportFlags.ConnectionStatus);
+
         while (!bShutdown)
         {
             if (!Connections[handle].IsAlive())
