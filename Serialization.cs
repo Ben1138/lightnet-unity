@@ -115,10 +115,9 @@ public class UserState : NetworkData
         // so we need to always use sizeof(float) instead
 
         sizeof(byte) +          // header     (ENetDataType.UserState)
-        sizeof(float) * 3 +     // Vector3    CannonPosition;
-        sizeof(float) * 4 +     // Quaternion CannonRotation;
-        sizeof(float) +      //TargetPosition in Percentage
-        sizeof(float) +         //Input given, just triggers method in server           
+        sizeof(float) +         // float      CannonStrength
+        sizeof(float) +         // TargetPosition in Percentage
+        sizeof(float) +         // Input given, just triggers method in server           
         sizeof(float) * 3 +     // Vector3    HeadPosition;
         sizeof(float) * 4 +     // Quaternion HeadRotation;
         sizeof(float) * 3 +     // Vector3    HandLeftPosition;
@@ -126,11 +125,10 @@ public class UserState : NetworkData
         sizeof(float) * 3 +     // Vector3    HandRightPosition;
         sizeof(float) * 4;      // Quaternion HandRightRotation;
 
-    
-    public Vector3      CannonPosition;
-    public Quaternion   CannonRotation;
+
+    public float        CannonStrength;
     public float        TargetPosition;
-    public float       InputGiven;
+    public float        InputGiven;
     public Vector3      HeadPosition;
     public Quaternion   HeadRotation;
     public Vector3      HandLeftPosition;
@@ -147,8 +145,7 @@ public class UserState : NetworkData
         Debug.Assert(data.Length >= SIZE);
         Debug.Assert((ENetDataType)data[head] == ENetDataType.UserState);
         head += sizeof(byte);
-        SerializationHelper.FromBytes(data, ref head, ref CannonPosition);
-        SerializationHelper.FromBytes(data, ref head, ref CannonRotation);
+        CannonStrength = SerializationHelper.FromBytes(data, ref head);
         TargetPosition = SerializationHelper.FromBytes(data, ref head);
         InputGiven = SerializationHelper.FromBytes(data, ref head);
         SerializationHelper.FromBytes(data, ref head, ref HeadPosition);
@@ -165,8 +162,7 @@ public class UserState : NetworkData
         Cache[head] = (byte)ENetDataType.UserState; head += sizeof(byte);
 
         
-        SerializationHelper.ToBytes(ref CannonPosition,    Cache, ref head);
-        SerializationHelper.ToBytes(ref CannonRotation,    Cache, ref head);
+        SerializationHelper.ToBytes(CannonStrength,    Cache, ref head);
         SerializationHelper.ToBytes(TargetPosition, Cache, ref head);
         SerializationHelper.ToBytes(InputGiven,         Cache, ref head);
         SerializationHelper.ToBytes(ref HeadPosition,      Cache, ref head);
