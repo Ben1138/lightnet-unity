@@ -75,9 +75,10 @@ public interface NetworkData
 
 public enum EExperimentStatus
 {
-    Waiting,  // Waiting for other participant
-    WarmUp,   // Potential Countdown until something happens
-    Running,  // Information is send and received , experiment runs
+    Waiting,        // Waiting for experiment to start
+    WarmUp,         // Countdown till next Trial
+    RunningTrial,
+    TrialEnd
 }
 
 public class ExperimentState : NetworkData
