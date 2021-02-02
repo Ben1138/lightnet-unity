@@ -8,27 +8,33 @@ namespace LightNet
     /// </summary>
     public static class SerializationHelper
     {
-        public static float FromBytes(byte[] data, ref int offset)
+        public static void FromBytes(byte[] data, ref int offset, ref bool value)
+        {
+            Debug.Assert(offset + sizeof(byte) <= data.Length);
+            value = data[offset] != 0;
+            offset += sizeof(byte);
+        }
+
+        public static void FromBytes(byte[] data, ref int offset, ref float value)
         {
             Debug.Assert(offset + sizeof(float) <= data.Length);
-            float value = BitConverter.ToSingle(data, offset);
+            value = BitConverter.ToSingle(data, offset);
             offset += sizeof(float);
-            return value;
         }
 
         public static void FromBytes(byte[] data, ref int offset, ref Vector3 vector)
         {
-            vector.x = FromBytes(data, ref offset);
-            vector.y = FromBytes(data, ref offset);
-            vector.z = FromBytes(data, ref offset);
+            FromBytes(data, ref offset, ref vector.x);
+            FromBytes(data, ref offset, ref vector.y);
+            FromBytes(data, ref offset, ref vector.z);
         }
 
         public static void FromBytes(byte[] data, ref int offset, ref Quaternion quat)
         {
-            quat.x = FromBytes(data, ref offset);
-            quat.y = FromBytes(data, ref offset);
-            quat.z = FromBytes(data, ref offset);
-            quat.w = FromBytes(data, ref offset);
+            FromBytes(data, ref offset, ref quat.x);
+            FromBytes(data, ref offset, ref quat.y);
+            FromBytes(data, ref offset, ref quat.z);
+            FromBytes(data, ref offset, ref quat.w);
         }
 
         public static void ToBytes(ulong value, byte[] data, ref int offset)
@@ -37,6 +43,13 @@ namespace LightNet
             byte[] buffer = BitConverter.GetBytes(value);
             Array.Copy(buffer, 0, data, offset, buffer.Length);
             offset += buffer.Length;
+        }
+
+        public static void ToBytes(bool value, byte[] data, ref int offset)
+        {
+            Debug.Assert(offset + sizeof(bool) <= data.Length);
+            data[offset] = value ? (byte)1 : (byte)0;
+            offset += sizeof(byte);
         }
 
         public static void ToBytes(float value, byte[] data, ref int offset)
