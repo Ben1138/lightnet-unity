@@ -8,33 +8,33 @@ namespace LightNet
     /// </summary>
     public static class SerializationHelper
     {
-        public static void FromBytes(byte[] data, ref int offset, ref bool value)
+        public static void FromBytes(byte[] data, ref int offset, out bool value)
         {
             Debug.Assert(offset + sizeof(byte) <= data.Length);
             value = data[offset] != 0;
             offset += sizeof(byte);
         }
 
-        public static void FromBytes(byte[] data, ref int offset, ref float value)
+        public static void FromBytes(byte[] data, ref int offset, out float value)
         {
             Debug.Assert(offset + sizeof(float) <= data.Length);
             value = BitConverter.ToSingle(data, offset);
             offset += sizeof(float);
         }
 
-        public static void FromBytes(byte[] data, ref int offset, ref Vector3 vector)
+        public static void FromBytes(byte[] data, ref int offset, out Vector3 vector)
         {
-            FromBytes(data, ref offset, ref vector.x);
-            FromBytes(data, ref offset, ref vector.y);
-            FromBytes(data, ref offset, ref vector.z);
+            FromBytes(data, ref offset, out vector.x);
+            FromBytes(data, ref offset, out vector.y);
+            FromBytes(data, ref offset, out vector.z);
         }
 
-        public static void FromBytes(byte[] data, ref int offset, ref Quaternion quat)
+        public static void FromBytes(byte[] data, ref int offset, out Quaternion quat)
         {
-            FromBytes(data, ref offset, ref quat.x);
-            FromBytes(data, ref offset, ref quat.y);
-            FromBytes(data, ref offset, ref quat.z);
-            FromBytes(data, ref offset, ref quat.w);
+            FromBytes(data, ref offset, out quat.x);
+            FromBytes(data, ref offset, out quat.y);
+            FromBytes(data, ref offset, out quat.z);
+            FromBytes(data, ref offset, out quat.w);
         }
 
         public static void ToBytes(ulong value, byte[] data, ref int offset)
@@ -60,14 +60,14 @@ namespace LightNet
             offset += buffer.Length;
         }
 
-        public static void ToBytes(ref Vector3 vector, byte[] data, ref int offset)
+        public static void ToBytes(in Vector3 vector, byte[] data, ref int offset)
         {
             ToBytes(vector.x, data, ref offset);
             ToBytes(vector.y, data, ref offset);
             ToBytes(vector.z, data, ref offset);
         }
 
-        public static void ToBytes(ref Quaternion quat, byte[] data, ref int offset)
+        public static void ToBytes(in Quaternion quat, byte[] data, ref int offset)
         {
             ToBytes(quat.x, data, ref offset);
             ToBytes(quat.y, data, ref offset);
