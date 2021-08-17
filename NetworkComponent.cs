@@ -74,37 +74,17 @@ namespace LightNet
         // Why is the size 256? Because the type number used for indexing is a byte
         Type[] NetworkDataTypes = new Type[256];
 
-        // Also storing the constructor infos for each type, so we don't have to retrieve them
-        // everytime for every single incoming package
-        ConstructorInfo[] NetworkDataConstructors = new ConstructorInfo[256];
-
         NetworkService Net = new NetworkService();
 
 
-        public void RegisterNetworkDataClass(byte networkDataTypeNumber, Type networkDataClass)
+        public void RegisterNetworkDataClass<T>(byte ID) where T : NetworkData
         {
-            if (!typeof(NetworkData).IsAssignableFrom(networkDataClass))
+            if (NetworkDataTypes[ID] != null)
             {
-                Debug.LogErrorFormat("Tried to register type '{0}' as network data, although it doesn't implement the 'NetworkData' interface!", networkDataClass.ToString());
+                Debug.LogWarningFormat("Network data type '{0}' is already registered to: {1}", ID, NetworkDataTypes[ID].ToString());
                 return;
             }
-
-            if (NetworkDataTypes[networkDataTypeNumber] != null)
-            {
-                Debug.LogWarningFormat("Network data type '{0}' is already registered to: {1}", networkDataTypeNumber, NetworkDataTypes[networkDataTypeNumber].ToString());
-                return;
-            }
-
-            //ConstructorInfo ci = networkDataClass.GetConstructor(BindingFlags.Public, Type.DefaultBinder, Type.EmptyTypes, null);
-            ConstructorInfo ci = networkDataClass.GetConstructor(Type.EmptyTypes);
-            if (ci == null || !ci.IsPublic)
-            {
-                Debug.LogErrorFormat("Tried to register type '{0}' as network data, although it doesn't have a default public parameterless constructor!", networkDataClass.ToString());
-                return;
-            }
-
-            NetworkDataTypes[networkDataTypeNumber] = networkDataClass;
-            NetworkDataConstructors[networkDataTypeNumber] = ci;
+            NetworkDataTypes[ID] = typeof(T);
         }
 
         /// <summary>
@@ -213,6 +193,26 @@ namespace LightNet
         {
             return Net.Close();
         }
+
+        /// <summary>
+        /// Intentionally disconnect from one specific peer.<br/>
+        /// If we're a running client, this call is synonymous with calling <see cref="Close"/>.
+        /// </summary>
+        /// <param name="connection">The connection you want to close.</param>
+        /// <returns>False, if the given connection is unknown, e.g. due to not longer being alive (already closed).</returns>
+        public bool Disconnect(ConnectionHandle connection)
+        {
+            return Net.Disconnect(connection);
+        }
+
+        /// <summary>
+        /// Here you can check whether a connection, you polled at some point in the past using <see cref="GetConnections"/>,
+        /// is still alive (connected).
+        /// </summary>
+        public bool IsAlive(ConnectionHandle connection)
+        {
+            return Net.IsAlive(connection);
+        }
    
         /// <summary>
         /// Send a message through a specific connection / to a specific destination.
@@ -287,9 +287,7 @@ namespace LightNet
                     byte type = message[0];
                     if (NetworkDataTypes[type] != null)
                     {
-                        Debug.Assert(NetworkDataConstructors[type] != null);
-
-                        NetworkData networkData = (NetworkData)NetworkDataConstructors[type].Invoke(null);
+                        NetworkData networkData = (NetworkData)Activator.CreateInstance(NetworkDataTypes[type]);
                         networkData.Deserialize(message);
                         ReceivedNetworkDataEventArgs args = new ReceivedNetworkDataEventArgs(connection, networkData, message[0]);
                         OnNetworkDataReceived?.Invoke(this, args);
