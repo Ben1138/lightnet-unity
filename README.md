@@ -12,7 +12,7 @@ This small library aims to provide a minimum, low-level networking layer, withou
  - Simple message serialization, without using reflection
  - Reliable / unreliable data transmission
 
-![](Images/img1.gif)
+![](img1.gif)
 
 ## Structure
 ### NetworkService
