@@ -21,6 +21,8 @@ public class LightNetExample : MonoBehaviour
         Debug.Assert(CubeClient != null);
 
         Data = new CubeTransformData();
+        Net.RegisterNetworkDataClass<CubeTransformData>(CubeTransformData.ID);
+
         Net.OnNetworkDataReceived += OnDataReceive;
     }
 
@@ -45,6 +47,8 @@ public class LightNetExample : MonoBehaviour
                 Data.Position = CubeClient.position;
                 Data.Rotation = CubeClient.rotation;
             }
+
+            Net.BroadcastNetworkData(ENetChannel.Unreliable, Data);
         }
     }
 
@@ -75,7 +79,10 @@ class CubeTransformData : NetworkData
     public Vector3 Position;
     public Quaternion Rotation;
 
-    const int SIZE = sizeof(float) * 7;
+    const int SIZE = 
+        sizeof(byte) +          // ID
+        sizeof(float) * 3 +     // Position
+        sizeof(float) * 4;      // Rotation
 
     // Cache the data, so we don't reallocate for each serialization.
     // This is not mandatory though.
@@ -98,7 +105,7 @@ class CubeTransformData : NetworkData
     public void Deserialize(byte[] data)
     {
         int offset = 0;
-        Debug.Assert(data[0] == ID);
+        Debug.Assert(data[offset++] == ID);
         SerializationHelper.FromBytes(data, ref offset, out Position);
     }
 }
