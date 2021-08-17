@@ -68,7 +68,7 @@ namespace LightNet
         /// <summary>
         /// NOTE: This is only checking whether you've been handed a valid handle in the first place!<br/>
         /// It does NOT check whether the connection behind this handle is still in existence or not!<br/>
-        /// To check the connection state, use <see cref="NetworkService.IsConnected"/>
+        /// To check the connection state, use <see cref="NetworkService.IsAlive"/>
         /// </summary>
         public bool IsValid()
         {
@@ -159,6 +159,8 @@ namespace LightNet
         int PortUnreliable;
         IPAddress RemoteAddress;
 
+        ConcurrentQueue<int> FreeUnreliablePorts = new ConcurrentQueue<int>();
+
         ConcurrentDictionary<ulong, Connection> Connections = new ConcurrentDictionary<ulong, Connection>();
         ConcurrentQueue<ConnectionEvent> Events = new ConcurrentQueue<ConnectionEvent>();
 
@@ -199,7 +201,14 @@ namespace LightNet
 
             PortReliable = portReliable;
             PortUnreliable = portUnreliable;
-            while (Events.TryDequeue(out ConnectionEvent e)) { }
+
+            while (FreeUnreliablePorts.TryDequeue(out int _)) { }
+            for (int i = 1; i <= maxClients; ++i)
+            {
+                FreeUnreliablePorts.Enqueue(PortUnreliable + i);
+            }
+
+            while (Events.TryDequeue(out ConnectionEvent _)) { }
 
             Server = new TcpListener(new IPEndPoint(IPAddress.Any, portReliable));
             try
@@ -335,6 +344,32 @@ namespace LightNet
         }
 
         /// <summary>
+        /// Intentionally disconnect from one specific peer.<br/>
+        /// If we're a running client, this call is synonymous with calling <see cref="Close"/>.
+        /// </summary>
+        /// <param name="connection">The connection you want to close.</param>
+        /// <returns>False, if the given connection is unknown, e.g. due to not longer being alive (already closed).</returns>
+        public bool Disconnect(ConnectionHandle connection)
+        {
+            if ((State == ENetworkState.Startup || State == ENetworkState.Running) && !IsServer())
+            {
+                return Close();
+            }
+
+            if (!Connections.TryRemove(connection.GetInternalHandle(), out Connection conn))
+            {
+                LogQueue.LogWarning($"Cannot close an unknown connection. Already disconnected?");
+                return false;
+            }
+
+            conn.SendDisconnect();
+            conn.Shutdown();
+            FreeUnreliablePorts.Enqueue(conn.RemoteUnreliable.Port);
+
+            return true;
+        }
+
+        /// <summary>
         /// Emulate bad network via loosing some packages intentionally and delaying their delivery
         /// </summary>
         /// <param name="looseLevel">0 = no packages get lost, 100 = all packages get lost</param>
@@ -389,12 +424,10 @@ namespace LightNet
         }
 
         /// <summary>
-        /// Here you can check whether a connection handle, you polled at some point in the past using <see cref="GetConnections"/>,
-        /// still points to a valid and existing connection.
+        /// Here you can check whether a connection, you polled at some point in the past using <see cref="GetConnections"/>,
+        /// is still alive (connected).
         /// </summary>
-        /// <param name="handle"></param>
-        /// <returns></returns>
-        public bool IsConnected(ConnectionHandle handle)
+        public bool IsAlive(ConnectionHandle handle)
         {
             return handle.IsValid() && Connections.ContainsKey(handle.GetInternalHandle()) && Connections[handle.GetInternalHandle()].IsAlive();
         }
@@ -604,8 +637,8 @@ namespace LightNet
                     ASSERT(client != null);
                     IPAddress address = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
 
-                    // TODO: implement proper port assignment
-                    int clientListenPort = ++PortUnreliable;
+                    ASSERT(FreeUnreliablePorts.Count > 0);
+                    ASSERT(FreeUnreliablePorts.TryDequeue(out int clientListenPort));
 
                     ulong handle = NextConnectionHandle++;
                     Connection conn = new Connection(this, handle, address, PortReliable, clientListenPort, client);
@@ -628,7 +661,7 @@ namespace LightNet
                 {
                     if (!conn.Value.IsAlive())
                     {
-                        if (!conn.Value.IntentionalDisconnect())
+                        if (!conn.Value.IsIntentionalDisconnect())
                         {
                             LogQueue.LogInfo("Connection to '{0}' lost!", new object[] { conn.Value.GetRemoteAddress().ToString() });
                         }
@@ -694,7 +727,7 @@ namespace LightNet
             {
                 if (!Connections[handle].IsAlive())
                 {
-                    if (!Connections[handle].IntentionalDisconnect())
+                    if (!Connections[handle].IsIntentionalDisconnect())
                     {
                         LogQueue.LogWarning("Connection to Server '{0}' lost!", new object[] { Connections[handle].GetRemoteAddress().ToString() });
                     }
@@ -786,6 +819,9 @@ namespace LightNet
                 public int Head;
             }
 
+            public IPEndPoint RemoteUnreliable { get; private set; }
+            IPEndPoint RemoteReliable;
+
             NetworkService Owner = null;
             ulong Handle = 0;
             ulong RemoteHandle = 0;
@@ -821,9 +857,6 @@ namespace LightNet
             // these contain just message data, without header (a.k.a. timestamp and message length)
             ConcurrentQueue<byte[]> ReliableSendBuffer = new ConcurrentQueue<byte[]>();
             ConcurrentQueue<byte[]> UnreliableSendBuffer = new ConcurrentQueue<byte[]>();
-
-            IPEndPoint RemoteReliable;
-            IPEndPoint RemoteUnreliable;
 
             public Connection(NetworkService owner, ulong handle, IPAddress address, int portReliable, int portUnreliable, TcpClient client)
             {
@@ -879,7 +912,7 @@ namespace LightNet
                 return bAlive;
             }
 
-            public bool IntentionalDisconnect()
+            public bool IsIntentionalDisconnect()
             {
                 return bIntentionalDisconnect;
             }
