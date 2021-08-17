@@ -12,8 +12,6 @@ This small library aims to provide a minimum, low-level networking layer, withou
  - Simple message serialization, without using reflection
  - Reliable / unreliable data transmission
 
-![](img1.gif)
-
 ## Structure
 ### NetworkService
 The core, `NetworkService`, is pretty much platform independent (except for two methods), and implements all network functionalities by wrapping around basic sockets, implementing server and client behaviour respectively, providing thread safe events (event queue), etc. It does so in a multi threaded way, meaning that every connection willl be handled by a dedicated thread and has it's dedicated receive buffer.
@@ -37,6 +35,7 @@ Wraps around `NetworkService` as a Unity component (`MonoBehaviour`), bringing e
 
 ### Implementation Example
 in the subfolder "*example*" within this repository, there's a simple implementation example you can look at or use as a template for your own project.
+![](img1.gif)
 
 ### Connection Handles
 A `ConnectionHandle` is representing a single connection to another peer. Where Servers usually maintain mutiple connections, a Client only has one at most: The one to the Server. You can grab a list of `ConnectionHandle`'s by calling `GetConnections`. Using a ConnectionHandle, you can inspect that specific connection whether it's still alive, close it, or send a message to just that peer. See *Available Component Methods* below.
